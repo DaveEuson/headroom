@@ -1,24 +1,38 @@
 # ClaudeTrackerPi
 
 A tiny always-on dashboard for your **Claude usage limits**, built for a
-**Raspberry Pi Zero 2 W** with a **PiSugar** battery. It shows:
+**Raspberry Pi Zero 2 W** with a **PiSugar** battery. Glance at it and know
+how much usage you have left, when it resets, and whether Claude is being
+used right now — no terminal, no menubar, no estimating.
 
-- **Meters and percentages** for every usage window Claude reports
-  (5-hour session, weekly, weekly Opus, …) — fuel-gauge style, so the bar
-  shows how much you have **left**
-- **When each limit resets** — live countdown plus local clock time
-- **PiSugar battery level** (with a charging indicator)
-- A **clock**, and Claude's own look: the warm cream claude.ai theme by day,
+<p align="center">
+  <img src="docs/screenshots/day.png" width="380" alt="Day mode — cream Claude theme, Pip dancing">
+  &nbsp;
+  <img src="docs/screenshots/night.png" width="380" alt="Night mode — dark Claude theme, Pip asleep">
+</p>
+
+## What you get
+
+- **Meters and percentages** for every usage window Claude reports (5-hour
+  session, weekly, weekly Opus, …) — fuel-gauge style, so the bar shows how
+  much you have **left**; amber under 30%, red under 10%
+- **Reset countdowns** — live "resets in 2h 13m" plus the local clock time
+- **A clock**, and Claude's own look: the warm cream claude.ai theme by day,
   its dark theme at night (on a configurable schedule)
-- **Pip**, the tracker's own little mascot — chills in sunglasses between
-  sessions, starts dancing when it detects you're actively using Claude,
-  gets sweaty when you're running low, panics when you're almost out, and
-  puts on a nightcap and sleeps at night
+- **PiSugar battery level** with a charging indicator
+- **Pip.** The tracker's little mascot chills in sunglasses between
+  sessions, starts dancing the moment it detects you're actually using
+  Claude, sweats when you're running low, panics when you're almost out,
+  and puts on a nightcap and sleeps at night.
 
-No pip installs, no Node, no database — one Python 3 standard-library process
-serving one page. It runs happily in a few MB of RAM on the Zero 2 W, and you
-view it from any browser on your network (phone, laptop, or a screen attached
-to the Pi in kiosk mode).
+<p align="center">
+  <img src="docs/screenshots/moods.png" width="720" alt="Pip's five moods: chilling, dancing, running low, almost out, and asleep">
+</p>
+
+No pip installs, no Node, no database — one Python 3 standard-library
+process serving one page. It idles in a few MB of RAM on the Zero 2 W, and
+you view it from any browser on your network (phone, laptop, or a small
+screen on the Pi itself in kiosk mode).
 
 ## Setup (two steps)
 
@@ -56,8 +70,9 @@ tells you and you just re-run the script.)
 python3 app/main.py --demo
 ```
 
-Serves fake data on http://localhost:8080 so you can see the dashboard
-(and the dance moves) from any machine.
+Serves fake data on http://localhost:8080 so you can see the dashboard (and
+Pip's dance moves) from any machine. Add `?night=1` to preview night mode
+and `?active=0` to see Pip chilling.
 
 ## PiSugar battery
 
@@ -92,16 +107,17 @@ chromium-browser --kiosk --app=http://localhost:8080
 
 - `app/anthropic_usage.py` calls the same usage endpoint Claude Code's
   `/usage` command uses (`api.anthropic.com/api/oauth/usage`) with your
-  OAuth token, and refreshes the token when it expires.
+  OAuth token, and refreshes the token when it expires. Real percentages
+  from Anthropic — no token counting or estimating.
 - `app/pisugar.py` talks to `pisugar-server` on `127.0.0.1:8423`.
 - `app/main.py` polls both in the background and serves the dashboard plus
   a small `/api/status` JSON endpoint.
-- The meters turn amber under 30% left and red under 10% — same for the
-  mascot's mood. Day/night uses the browser's clock (add `?night=1` to the
-  URL to preview night mode).
 - "Session detected" means usage went up between two polls; Pip keeps
   dancing for 15 minutes after the last increase, then goes back to
-  chilling (`?active=1` / `?active=0` to preview).
+  chilling.
+- Day/night uses the browser's clock. Fonts are Claude's brand stacks with
+  safe fallbacks (Georgia / system sans), so nothing is downloaded and
+  nothing needs a license.
 
 ## Troubleshooting
 
