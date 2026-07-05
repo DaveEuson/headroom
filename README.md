@@ -20,6 +20,9 @@ used right now — no terminal, no menubar, no estimating.
 - **A clock**, and Claude's own look: the warm cream claude.ai theme by day,
   its dark theme at night (on a configurable schedule)
 - **PiSugar battery level** with a charging indicator
+- **Whisplay HAT support** — draws a compact version of the dashboard
+  right on the PiSugar Whisplay's 1.69″ LCD (240×280, ST7789), no browser
+  or desktop needed on the Pi
 - **Pip.** The tracker's mascot: a little retro computer. Between sessions
   it chills with a sunglasses screensaver; the moment it detects you're
   actually using Claude it starts dancing while code flies across its
@@ -95,10 +98,26 @@ stays hidden — nothing to configure.
 | `credentials_path` | `null` | Custom credentials location (auto-detected otherwise) |
 | `night_start` | `"22:00"` | When the screen dims and Pip goes to sleep |
 | `night_end` | `"07:00"` | When Pip wakes up |
+| `hat_display` | `true` | Draw on the Whisplay HAT LCD (auto-off when absent) |
 
-## Kiosk mode (optional)
+## Whisplay HAT screen
 
-Got a little screen on the Pi? Show the dashboard full-screen on boot:
+Using the [PiSugar Whisplay HAT](https://github.com/PiSugar/whisplay)?
+Nothing to configure: `install.sh` installs the three apt libraries it
+needs (`python3-pil`, `python3-spidev`, `python3-gpiozero`), enables SPI,
+and the tracker draws straight onto the LCD — clock, battery, Pip, and the
+top three usage meters, in the same day/night themes. If no HAT is
+attached the display thread just switches itself off.
+
+Two notes:
+
+- Don't run PiSugar's own Whisplay demo/daemon at the same time — two
+  programs fighting over one screen ends badly for both.
+- Set `"hat_display": false` in `config.json` if you ever want it off.
+
+## Kiosk mode (optional, for HDMI screens)
+
+Got a regular screen on the Pi? Show the dashboard full-screen on boot:
 
 ```bash
 sudo apt install -y chromium-browser
@@ -117,6 +136,9 @@ your phone's browser is always the snappy option.
   OAuth token, and refreshes the token when it expires. Real percentages
   from Anthropic — no token counting or estimating.
 - `app/pisugar.py` talks to `pisugar-server` on `127.0.0.1:8423`.
+- `app/display.py` drives the Whisplay's ST7789 LCD over SPI directly
+  (same pins and init sequence as PiSugar's own driver), rendering frames
+  with Pillow.
 - `app/main.py` polls both in the background and serves the dashboard plus
   a small `/api/status` JSON endpoint.
 - "Session detected" means usage went up between two polls; Pip keeps

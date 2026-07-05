@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import anthropic_usage
+import display
 import pisugar
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -31,6 +32,7 @@ DEFAULT_CONFIG = {
     "credentials_path": None,
     "night_start": "22:00",   # when the mascot goes to sleep
     "night_end": "07:00",     # and when it wakes up
+    "hat_display": True,      # draw on the Whisplay HAT LCD when present
 }
 
 # How long after the last observed usage increase we still call the
@@ -247,6 +249,12 @@ def main():
     state = State(config)
     if not args.demo:
         start_pollers(state, config)
+
+    if config.get("hat_display", True):
+        snapshot_fn = demo_snapshot if args.demo else state.snapshot
+        threading.Thread(
+            target=display.run, args=(snapshot_fn, config), daemon=True
+        ).start()
 
     server = ThreadingHTTPServer(
         ("0.0.0.0", int(config["port"])), make_handler(state, args.demo)

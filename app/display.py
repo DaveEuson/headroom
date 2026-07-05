@@ -1,0 +1,336 @@
+"""Render the tracker on the PiSugar Whisplay HAT's 1.69" LCD (240x280).
+
+The Whisplay's screen is an ST7789 on SPI0 (DC=GPIO27, RST=GPIO4,
+backlight=GPIO22) -- no framebuffer, no browser. We draw a compact
+dashboard with Pillow and push RGB565 frames over SPI, mirroring the
+init sequence from PiSugar's own driver (github.com/PiSugar/whisplay).
+
+Needs: python3-pil, python3-spidev, python3-gpiozero (apt packages,
+installed by install.sh). If any are missing, or there is no SPI
+device, we log one line and let the web dashboard carry on alone.
+"""
+
+import datetime
+import sys
+import time
+
+WIDTH, HEIGHT = 240, 280
+Y_OFFSET = 20            # the 240x280 panel sits 20 rows into 240x320 RAM
+MADCTL = 0xC0            # rotation used by the vendor driver
+SPI_HZ = 40_000_000
+
+DC_PIN, RST_PIN, BL_PIN = 27, 4, 22
+
+ACTIVE_SECONDS = 900  # keep in sync with main.ACTIVE_SECONDS
+
+# compact labels sized for a 1.69" screen
+SHORT_LABELS = {
+    "five_hour": "Session (5h)",
+    "seven_day": "Weekly",
+    "seven_day_sonnet": "Sonnet",
+    "seven_day_opus": "Opus",
+    "seven_day_oauth_apps": "Apps",
+}
+
+THEMES = {
+    "day": {
+        "bg": (240, 238, 230), "ink": (61, 57, 41), "muted": (138, 132, 120),
+        "case": (230, 218, 191), "case_edge": (185, 166, 126),
+        "accent": (217, 119, 87), "accent_track": (235, 217, 206),
+        "warn": (232, 163, 23), "warn_track": (240, 227, 195),
+        "crit": (196, 69, 61), "crit_track": (239, 215, 211),
+    },
+    "night": {
+        "bg": (38, 38, 36), "ink": (245, 244, 239), "muted": (148, 144, 126),
+        "case": (230, 218, 191), "case_edge": (185, 166, 126),
+        "accent": (217, 119, 87), "accent_track": (74, 56, 47),
+        "warn": (250, 178, 25), "warn_track": (70, 59, 26),
+        "crit": (224, 82, 82), "crit_track": (74, 39, 39),
+    },
+}
+SCREEN_DARK = (32, 32, 30)
+PHOSPHOR = {"ok": (76, 217, 123), "warn": (250, 178, 25), "crit": (255, 111, 97)}
+SWEAT = (124, 196, 250)
+CAP, CAP_BAND, POMPOM = (109, 91, 208), (133, 119, 224), (242, 239, 233)
+
+
+class ST7789:
+    """Minimal driver for the Whisplay's LCD, matching the vendor init."""
+
+    def __init__(self):
+        import spidev
+        from gpiozero import DigitalOutputDevice
+
+        self.dc = DigitalOutputDevice(DC_PIN)
+        self.rst = DigitalOutputDevice(RST_PIN, initial_value=True)
+        self.backlight = DigitalOutputDevice(BL_PIN, initial_value=True)
+        self.spi = spidev.SpiDev()
+        self.spi.open(0, 0)
+        self.spi.max_speed_hz = SPI_HZ
+        self.spi.mode = 0
+        self._init_panel()
+
+    def _cmd(self, command, *params):
+        self.dc.off()
+        self.spi.writebytes([command])
+        if params:
+            self.dc.on()
+            self.spi.writebytes(list(params))
+
+    def _init_panel(self):
+        self.rst.off(); time.sleep(0.02); self.rst.on(); time.sleep(0.12)
+        self._cmd(0x11)                     # sleep out
+        time.sleep(0.12)
+        self._cmd(0x36, MADCTL)             # orientation
+        self._cmd(0x3A, 0x05)               # 16-bit color
+        self._cmd(0xB2, 0x0C, 0x0C, 0x00, 0x33, 0x33)
+        self._cmd(0xB7, 0x35)
+        self._cmd(0xBB, 0x32)
+        self._cmd(0xC2, 0x01)
+        self._cmd(0xC3, 0x15)
+        self._cmd(0xC4, 0x20)
+        self._cmd(0xC6, 0x0F)
+        self._cmd(0xD0, 0xA4, 0xA1)
+        self._cmd(0xE0, 0xD0, 0x08, 0x0E, 0x09, 0x09, 0x05, 0x31, 0x33,
+                  0x48, 0x17, 0x14, 0x15, 0x31, 0x34)
+        self._cmd(0xE1, 0xD0, 0x08, 0x0E, 0x09, 0x09, 0x15, 0x31, 0x33,
+                  0x48, 0x17, 0x14, 0x15, 0x31, 0x34)
+        self._cmd(0x21)                     # inversion on (panel needs it)
+        self._cmd(0x29)                     # display on
+
+    def show(self, image):
+        y0, y1 = Y_OFFSET, Y_OFFSET + HEIGHT - 1
+        self._cmd(0x2A, 0, 0, (WIDTH - 1) >> 8, (WIDTH - 1) & 0xFF)
+        self._cmd(0x2B, y0 >> 8, y0 & 0xFF, y1 >> 8, y1 & 0xFF)
+        self._cmd(0x2C)
+        raw = image.convert("RGB").tobytes("raw", "RGB;16")
+        buf = bytearray(len(raw))           # swap to the panel's big-endian
+        buf[0::2] = raw[1::2]
+        buf[1::2] = raw[0::2]
+        self.dc.on()
+        try:
+            self.spi.writebytes2(buf)
+        except AttributeError:
+            for i in range(0, len(buf), 4096):
+                self.spi.writebytes(list(buf[i:i + 4096]))
+
+
+# ---------------------------------------------------------------- rendering
+
+def _load_fonts():
+    from PIL import ImageFont
+    path = "/usr/share/fonts/truetype/dejavu/DejaVuSans%s.ttf"
+    fonts = {}
+    try:
+        fonts["clock"] = ImageFont.truetype(path % "-Bold", 34)
+        fonts["big"] = ImageFont.truetype(path % "-Bold", 17)
+        fonts["label"] = ImageFont.truetype(path % "", 14)
+        fonts["small"] = ImageFont.truetype(path % "", 12)
+    except OSError:
+        default = ImageFont.load_default()
+        fonts = {k: default for k in ("clock", "big", "label", "small")}
+    return fonts
+
+
+def _parse_hm(text, fallback):
+    try:
+        h, m = str(text).split(":")
+        return (int(h) % 24) * 60 + int(m) % 60
+    except (ValueError, AttributeError):
+        return fallback
+
+
+def _is_night(snapshot):
+    night = snapshot.get("night") or {}
+    start = _parse_hm(night.get("start"), 22 * 60)
+    end = _parse_hm(night.get("end"), 7 * 60)
+    now = datetime.datetime.now()
+    mins = now.hour * 60 + now.minute
+    if start == end:
+        return False
+    return (start <= mins or mins < end) if start > end \
+        else (start <= mins < end)
+
+
+def _mood(snapshot, night):
+    windows = snapshot.get("windows") or []
+    if night:
+        return "sleep"
+    if windows:
+        least = min(100 - w["utilization"] for w in windows)
+        if least <= 10:
+            return "panic"
+        if least <= 30:
+            return "worried"
+    return "happy" if snapshot.get("session_active") else "chill"
+
+
+def _reset_text(resets_at):
+    if not resets_at:
+        return ""
+    try:
+        when = datetime.datetime.fromisoformat(
+            str(resets_at).replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    delta = when - datetime.datetime.now(datetime.timezone.utc)
+    minutes = int(delta.total_seconds() // 60)
+    if minutes <= 0:
+        return "resetting..."
+    days, rem = divmod(minutes, 1440)
+    hours, mins = divmod(rem, 60)
+    if days:
+        return f"resets in {days}d {hours}h"
+    if hours:
+        return f"resets in {hours}h {mins}m"
+    return f"resets in {mins}m"
+
+
+def _draw_pip(draw, mood, frame, theme):
+    """A simplified Pip (the retro computer) centered around x=120."""
+    bounce = -3 if (mood in ("happy", "panic") and frame % 2) else 0
+    dy = bounce
+
+    # legs
+    for x in (101, 134):
+        draw.rounded_rectangle((x, 122 + dy, x + 5, 138), 2,
+                               fill=theme["case_edge"])
+    # arms (up when dancing, down otherwise)
+    ay = (62, 76) if (mood == "happy" and frame % 2) or mood == "panic" \
+        else (92, 78)
+    draw.line((80, 78 + dy, 64, ay[0] + dy), fill=theme["case_edge"], width=4)
+    draw.line((160, 78 + dy, 176, ay[0] + dy), fill=theme["case_edge"], width=4)
+    # monitor + screen
+    draw.rounded_rectangle((78, 50 + dy, 162, 106 + dy), 6,
+                           fill=theme["case"], outline=theme["case_edge"])
+    draw.rounded_rectangle((86, 58 + dy, 154, 96 + dy), 3, fill=SCREEN_DARK)
+    # rainbow stripe chip
+    for i, color in enumerate(((67, 204, 110), (250, 178, 25),
+                               (232, 136, 58), (224, 82, 82))):
+        draw.rectangle((88 + i * 8, 99 + dy, 94 + i * 8, 102 + dy), fill=color)
+    # keyboard
+    draw.rounded_rectangle((70, 110 + dy, 170, 122 + dy), 4,
+                           fill=theme["case"], outline=theme["case_edge"])
+
+    phos = PHOSPHOR["warn" if mood == "worried" else
+                    "crit" if mood == "panic" else "ok"]
+    cx, cy = 120, 74 + dy
+    if mood == "chill":         # sunglasses screensaver
+        draw.rounded_rectangle((cx - 18, cy - 6, cx - 4, cy + 2), 2, fill=phos)
+        draw.rounded_rectangle((cx + 4, cy - 6, cx + 18, cy + 2), 2, fill=phos)
+        draw.rectangle((cx - 5, cy - 4, cx + 5, cy - 2), fill=phos)
+        draw.arc((cx - 9, cy + 2, cx + 9, cy + 14), 20, 160, fill=phos, width=2)
+    elif mood == "happy":       # code flies across the screen
+        widths = (28, 40, 20, 36, 26, 16)
+        for i, w in enumerate(widths[:4 + frame % 3]):
+            x = 90 + (6 if i % 3 else 0)
+            draw.rectangle((x, 61 + dy + i * 6, x + w, 63 + dy + i * 6),
+                           fill=phos)
+    elif mood == "sleep":       # crescent moon + nightcap + Zzz
+        draw.ellipse((cx - 10, cy - 10, cx + 10, cy + 10), fill=(63, 143, 92))
+        draw.ellipse((cx - 5, cy - 13, cx + 13, cy + 5), fill=SCREEN_DARK)
+        draw.polygon((82, 52, 108, 32, 148, 38, 150, 52), fill=CAP)
+        draw.rounded_rectangle((76, 46, 158, 56), 5, fill=CAP_BAND)
+        draw.ellipse((146, 32, 158, 44), fill=POMPOM)
+        if frame % 2:
+            draw.text((164, 44), "z", fill=theme["muted"])
+            draw.text((172, 34), "Z", fill=theme["muted"])
+    else:                       # worried / panic face
+        draw.rectangle((cx - 14, cy - 8, cx - 9, cy), fill=phos)
+        draw.rectangle((cx + 9, cy - 8, cx + 14, cy), fill=phos)
+        if mood == "panic":
+            draw.ellipse((cx - 4, cy + 5, cx + 4, cy + 13), fill=phos)
+        else:
+            draw.rectangle((cx - 7, cy + 8, cx + 7, cy + 10), fill=phos)
+    if mood in ("worried", "panic") and frame % 2:
+        draw.ellipse((166, 58 + dy, 172, 67 + dy), fill=SWEAT)
+
+
+def render(snapshot, frame, fonts):
+    from PIL import Image, ImageDraw
+
+    night = _is_night(snapshot)
+    theme = THEMES["night" if night else "day"]
+    mood = _mood(snapshot, night)
+    img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
+    draw = ImageDraw.Draw(img)
+
+    # header: clock left, battery right
+    clock = time.strftime("%I:%M %p").lstrip("0")
+    draw.text((10, 6), clock, font=fonts["clock"], fill=theme["ink"])
+    battery = snapshot.get("battery")
+    if battery:
+        pct = round(battery["percent"])
+        label = f"{pct}%" + ("+" if battery.get("charging") else "")
+        w = draw.textlength(label, font=fonts["big"])
+        draw.text((230 - w, 8), label, font=fonts["big"], fill=theme["ink"])
+        color = theme["crit"] if pct <= 10 else \
+            theme["warn"] if pct <= 25 else theme["accent"]
+        track = theme["accent_track"]
+        draw.rounded_rectangle((186, 30, 230, 37), 3, fill=track)
+        draw.rounded_rectangle((186, 30, 186 + max(3, int(44 * pct / 100)),
+                                37), 3, fill=color)
+
+    _draw_pip(draw, mood, frame, theme)
+
+    # meters (first three windows) or the error banner
+    error = snapshot.get("usage_error")
+    windows = (snapshot.get("windows") or [])[:3]
+    y = 140
+    if error:
+        words, line, lines = str(error).split(), "", []
+        for word in words:
+            trial = (line + " " + word).strip()
+            if draw.textlength(trial, font=fonts["small"]) > 216:
+                lines.append(line); line = word
+            else:
+                line = trial
+        lines.append(line)
+        for text in lines[:7]:
+            draw.text((12, y), text, font=fonts["small"], fill=theme["warn"])
+            y += 16
+    elif not windows:
+        draw.text((12, y), "Waiting for first reading...",
+                  font=fonts["label"], fill=theme["muted"])
+    for w in windows:
+        remaining = max(0.0, min(100.0, 100 - w["utilization"]))
+        sev = "crit" if remaining <= 10 else \
+            "low" if remaining <= 30 else "ok"
+        fill = theme["crit"] if sev == "crit" else \
+            theme["warn"] if sev == "low" else theme["accent"]
+        track = theme[("crit" if sev == "crit" else
+                       "warn" if sev == "low" else "accent") + "_track"]
+        label = SHORT_LABELS.get(w.get("key"), str(w["label"])[:14])
+        draw.text((12, y), label, font=fonts["label"], fill=theme["ink"])
+        value = f"{remaining:.0f}% left"
+        tw = draw.textlength(value, font=fonts["big"])
+        draw.text((228 - tw, y - 1), value, font=fonts["big"],
+                  fill=theme["ink"])
+        draw.rounded_rectangle((12, y + 18, 228, y + 29), 5, fill=track)
+        draw.rounded_rectangle(
+            (12, y + 18, 12 + max(6, int(216 * remaining / 100)), y + 29),
+            5, fill=fill)
+        draw.text((12, y + 31), _reset_text(w.get("resets_at")),
+                  font=fonts["small"], fill=theme["muted"])
+        y += 44
+    return img
+
+
+def run(snapshot_fn, config):
+    """Drive the HAT display forever. Degrades to a no-op without hardware."""
+    try:
+        panel = ST7789()
+    except Exception as exc:  # missing libs, no SPI device, no HAT
+        print(f"HAT display off ({exc.__class__.__name__}: {exc}); "
+              "web dashboard still available.", file=sys.stderr)
+        return
+    fonts = _load_fonts()
+    frame = 0
+    while True:
+        try:
+            panel.show(render(snapshot_fn(), frame, fonts))
+        except Exception as exc:
+            print(f"HAT display error: {exc}", file=sys.stderr)
+            time.sleep(10)
+        frame += 1
+        time.sleep(0.5)
