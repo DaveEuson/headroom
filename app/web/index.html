@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Tracker</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔆</text></svg>">
+</head>
+<body>
+<main class="wrap">
+
+  <header class="top">
+    <!-- Clawdette: an original cute starburst critter -->
+    <div id="mascot" class="mascot mood-happy" aria-hidden="true">
+      <svg viewBox="0 0 120 132" width="104" height="114">
+        <g class="m-legs" stroke="#b45309" stroke-width="5" stroke-linecap="round">
+          <line class="m-leg-l" x1="48" y1="96" x2="44" y2="120"/>
+          <line class="m-leg-r" x1="72" y1="96" x2="76" y2="120"/>
+        </g>
+        <g class="m-body">
+          <g class="m-petals" fill="#d97757">
+            <ellipse cx="60" cy="24" rx="9" ry="20"/>
+            <ellipse cx="60" cy="24" rx="9" ry="20" transform="rotate(45 60 60)"/>
+            <ellipse cx="60" cy="24" rx="9" ry="20" transform="rotate(90 60 60)"/>
+            <ellipse cx="60" cy="24" rx="9" ry="20" transform="rotate(135 60 60)"/>
+            <ellipse cx="60" cy="24" rx="9" ry="20" transform="rotate(180 60 60)"/>
+            <ellipse cx="60" cy="24" rx="9" ry="20" transform="rotate(225 60 60)"/>
+            <ellipse cx="60" cy="24" rx="9" ry="20" transform="rotate(270 60 60)"/>
+            <ellipse cx="60" cy="24" rx="9" ry="20" transform="rotate(315 60 60)"/>
+          </g>
+          <circle cx="60" cy="60" r="27" fill="#e08963"/>
+          <g class="m-face">
+            <circle class="m-eye" cx="51" cy="55" r="3.6" fill="#201512"/>
+            <circle class="m-eye" cx="69" cy="55" r="3.6" fill="#201512"/>
+            <path class="m-mouth-smile" d="M51 66 Q60 74 69 66" fill="none"
+                  stroke="#201512" stroke-width="3" stroke-linecap="round"/>
+            <circle class="m-mouth-o" cx="60" cy="68" r="4.5" fill="#201512"/>
+          </g>
+          <path class="m-sweat" d="M92 40 q6 9 0 13 q-6 -4 0 -13" fill="#7cc4fa"/>
+          <g class="m-arms" stroke="#b45309" stroke-width="5" stroke-linecap="round">
+            <line class="m-arm-l" x1="34" y1="66" x2="16" y2="52"/>
+            <line class="m-arm-r" x1="86" y1="66" x2="104" y2="52"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <div class="top-text">
+      <h1>Claude Tracker</h1>
+      <div class="sub">
+        <span id="plan" class="chip" hidden></span>
+        <span id="updated" class="muted">connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <div id="error" class="banner" hidden></div>
+
+  <section id="meters" class="card meters" aria-label="Usage limits">
+    <p class="muted loading">Waiting for first reading…</p>
+  </section>
+
+  <section id="battery-card" class="card battery" hidden aria-label="Pi battery">
+    <div class="stat">
+      <span class="stat-label">Pi battery</span>
+      <span class="stat-value"><span id="batt-pct">–</span><span class="unit">%</span>
+        <svg id="batt-bolt" class="bolt" hidden viewBox="0 0 24 24" width="16" height="16"
+             fill="#fab219"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>
+      </span>
+    </div>
+    <div class="meter mini"><div id="batt-fill" class="fill"></div></div>
+    <span id="batt-note" class="muted"></span>
+  </section>
+
+  <footer class="muted foot">
+    Higher bar = more usage left · <a href="https://github.com/DaveEuson/ClaudeTrackerPi">ClaudeTrackerPi</a>
+  </footer>
+
+</main>
+<script src="app.js"></script>
+</body>
+</html>
