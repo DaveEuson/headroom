@@ -8,8 +8,10 @@ A tiny always-on dashboard for your **Claude usage limits**, built for a
   shows how much you have **left**
 - **When each limit resets** — live countdown plus local clock time
 - **PiSugar battery level** (with a charging indicator)
-- A **dancing Claude mascot** who parties while you have plenty of usage,
-  gets sweaty when you're running low, and panics when you're almost out
+- A **clock**, and a gentle night mode that dims the screen on a schedule
+- **Pip**, the tracker's own little mascot — dances while you have plenty of
+  usage, gets sweaty when you're running low, panics when you're almost out,
+  and puts on a nightcap and sleeps at night
 
 No pip installs, no Node, no database — one Python 3 standard-library process
 serving one page. It runs happily in a few MB of RAM on the Zero 2 W, and you
@@ -72,6 +74,8 @@ stays hidden — nothing to configure.
 | `usage_poll_seconds` | `120` | How often to ask Anthropic for usage |
 | `battery_poll_seconds` | `20` | How often to read the PiSugar |
 | `credentials_path` | `null` | Custom credentials location (auto-detected otherwise) |
+| `night_start` | `"22:00"` | When the screen dims and Pip goes to sleep |
+| `night_end` | `"07:00"` | When Pip wakes up |
 
 ## Kiosk mode (optional)
 
@@ -91,7 +95,8 @@ chromium-browser --kiosk --app=http://localhost:8080
 - `app/main.py` polls both in the background and serves the dashboard plus
   a small `/api/status` JSON endpoint.
 - The meters turn amber under 30% left and red under 10% — same for the
-  mascot's mood.
+  mascot's mood. Day/night uses the browser's clock (add `?night=1` to the
+  URL to preview night mode).
 
 ## Troubleshooting
 

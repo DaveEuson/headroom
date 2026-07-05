@@ -11,37 +11,53 @@
 <main class="wrap">
 
   <header class="top">
-    <!-- Clawdette: an original cute starburst critter -->
+    <!-- Pip: ClaudeTrackerPi's own little mascot -->
     <div id="mascot" class="mascot mood-happy" aria-hidden="true">
-      <svg viewBox="0 0 120 132" width="104" height="114">
+      <svg viewBox="0 0 120 132" width="100" height="110">
         <g class="m-legs" stroke="#d97757" stroke-width="7" stroke-linecap="round">
-          <line class="m-leg-l" x1="51" y1="94" x2="48" y2="118"/>
-          <line class="m-leg-r" x1="69" y1="94" x2="72" y2="118"/>
+          <line class="m-leg-l" x1="46" y1="94" x2="46" y2="116"/>
+          <line class="m-leg-r" x1="74" y1="94" x2="74" y2="116"/>
         </g>
         <g class="m-body">
-          <!-- the spark: 11 irregular rays converging at the center -->
-          <g class="m-spark" stroke="#d97757" stroke-width="10" stroke-linecap="round">
-            <line x1="60" y1="56" x2="60" y2="17"/>
-            <line x1="60" y1="56" x2="60" y2="25" transform="rotate(31 60 60)"/>
-            <line x1="60" y1="56" x2="60" y2="19" transform="rotate(64 60 60)"/>
-            <line x1="60" y1="56" x2="60" y2="24" transform="rotate(97 60 60)"/>
-            <line x1="60" y1="56" x2="60" y2="16" transform="rotate(129 60 60)"/>
-            <line x1="60" y1="56" x2="60" y2="25" transform="rotate(163 60 60)"/>
-            <line x1="60" y1="56" x2="60" y2="18" transform="rotate(196 60 60)"/>
-            <line x1="60" y1="56" x2="60" y2="24" transform="rotate(228 60 60)"/>
-            <line x1="60" y1="56" x2="60" y2="17" transform="rotate(262 60 60)"/>
-            <line x1="60" y1="56" x2="60" y2="25" transform="rotate(295 60 60)"/>
-            <line x1="60" y1="56" x2="60" y2="19" transform="rotate(328 60 60)"/>
+          <path class="m-antenna" d="M60 32 C60 24 52 22 55 14" fill="none"
+                stroke="#d97757" stroke-width="4" stroke-linecap="round"/>
+          <rect x="24" y="30" width="72" height="66" rx="30" fill="#d97757"/>
+          <g class="m-arms" stroke="#d97757" stroke-width="6" stroke-linecap="round">
+            <line class="m-arm-l" x1="27" y1="68" x2="14" y2="79"/>
+            <line class="m-arm-r" x1="93" y1="68" x2="106" y2="79"/>
           </g>
-          <circle cx="60" cy="60" r="15" fill="#d97757"/>
+          <g class="m-cap">
+            <path d="M32 31 Q48 0 94 12 L86 31 Z" fill="#6d5bd0"/>
+            <circle cx="95" cy="12" r="5.5" fill="#f2efe9"/>
+            <rect x="27" y="26" width="66" height="10" rx="5" fill="#8577e0"/>
+          </g>
           <g class="m-face">
-            <circle class="m-eye" cx="54" cy="57" r="2.8" fill="#2c1a12"/>
-            <circle class="m-eye" cx="66" cy="57" r="2.8" fill="#2c1a12"/>
-            <path class="m-mouth-smile" d="M54 65 Q60 70 66 65" fill="none"
+            <g class="m-eyes-open">
+              <circle cx="46" cy="58" r="4.6" fill="#2c1a12"/>
+              <circle cx="74" cy="58" r="4.6" fill="#2c1a12"/>
+              <circle cx="47.6" cy="56.4" r="1.4" fill="#fff"/>
+              <circle cx="75.6" cy="56.4" r="1.4" fill="#fff"/>
+            </g>
+            <g class="m-eyes-closed" fill="none" stroke="#2c1a12"
+               stroke-width="2.5" stroke-linecap="round">
+              <path d="M41 59 Q46 63 51 59"/>
+              <path d="M69 59 Q74 63 79 59"/>
+            </g>
+            <circle cx="38" cy="70" r="4" fill="#b4552e" opacity="0.5"/>
+            <circle cx="82" cy="70" r="4" fill="#b4552e" opacity="0.5"/>
+            <path class="m-mouth-smile" d="M52 71 Q60 78 68 71" fill="none"
+                  stroke="#2c1a12" stroke-width="3" stroke-linecap="round"/>
+            <circle class="m-mouth-o" cx="60" cy="74" r="3.8" fill="#2c1a12"/>
+            <path class="m-mouth-sleep" d="M56 74 Q60 77 64 74" fill="none"
                   stroke="#2c1a12" stroke-width="2.5" stroke-linecap="round"/>
-            <circle class="m-mouth-o" cx="60" cy="66" r="3.5" fill="#2c1a12"/>
           </g>
-          <path class="m-sweat" d="M105 22 q6 9 0 13 q-6 -4 0 -13" fill="#7cc4fa"/>
+          <path class="m-sweat" d="M102 42 q6 9 0 13 q-6 -4 0 -13" fill="#7cc4fa"/>
+        </g>
+        <g class="m-zzz" fill="#c3c2b7" font-family="system-ui, sans-serif"
+           font-weight="700" font-style="italic">
+          <text class="m-z m-z1" x="94" y="36" font-size="11">z</text>
+          <text class="m-z m-z2" x="101" y="25" font-size="14">z</text>
+          <text class="m-z m-z3" x="109" y="14" font-size="17">z</text>
         </g>
       </svg>
     </div>
@@ -51,6 +67,10 @@
         <span id="plan" class="chip" hidden></span>
         <span id="updated" class="muted">connecting…</span>
       </div>
+    </div>
+    <div class="clock">
+      <div id="clock-time">–:–</div>
+      <div id="clock-date" class="muted"></div>
     </div>
   </header>
 

@@ -3,6 +3,27 @@
 const POLL_MS = 30000;
 
 let latest = null; // last /api/status payload
+let night = { start: "22:00", end: "07:00" }; // overwritten from server config
+
+// ?night=1 / ?night=0 forces night/day (handy for testing)
+const FORCE_NIGHT = new URLSearchParams(location.search).get("night");
+
+function parseHM(text, fallback) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(text || "").trim());
+  if (!m) return fallback;
+  return (+m[1] % 24) * 60 + (+m[2] % 60);
+}
+
+function isNight() {
+  if (FORCE_NIGHT !== null) return FORCE_NIGHT === "1";
+  const start = parseHM(night.start, 22 * 60);
+  const end = parseHM(night.end, 7 * 60);
+  const d = new Date();
+  const mins = d.getHours() * 60 + d.getMinutes();
+  if (start === end) return false;
+  return start < end ? mins >= start && mins < end
+                     : mins >= start || mins < end; // window crosses midnight
+}
 
 const el = (id) => document.getElementById(id);
 
@@ -101,12 +122,24 @@ function renderBattery(battery) {
 function renderMood(windows) {
   const mascot = el("mascot");
   let mood = "happy";
-  if (windows.length) {
+  if (isNight()) {
+    mood = "sleep"; // Pip sleeps at night no matter what
+  } else if (windows.length) {
     const minRemaining = Math.min(...windows.map((w) => 100 - w.utilization));
     if (minRemaining <= 10) mood = "panic";
     else if (minRemaining <= 30) mood = "worried";
   }
-  mascot.className = "mascot mood-" + mood;
+  const cls = "mascot mood-" + mood;
+  if (mascot.className !== cls) mascot.className = cls;
+}
+
+function renderClock() {
+  const now = new Date();
+  el("clock-time").textContent =
+    now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  el("clock-date").textContent =
+    now.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  document.body.classList.toggle("night", isNight());
 }
 
 function renderUpdated() {
@@ -136,6 +169,8 @@ function render(data) {
   plan.hidden = !data.plan;
   if (data.plan) plan.textContent = "Claude " + data.plan;
 
+  if (data.night) night = data.night;
+
   renderMeters(data.windows || []);
   renderMood(data.windows || []);
   renderBattery(data.battery);
@@ -155,5 +190,11 @@ async function poll() {
 }
 
 poll();
+renderClock();
 setInterval(poll, POLL_MS);
-setInterval(() => { tickCountdowns(); renderUpdated(); }, 1000);
+setInterval(() => {
+  tickCountdowns();
+  renderUpdated();
+  renderClock();
+  if (latest) renderMood(latest.windows || []); // day/night flips between polls
+}, 1000);

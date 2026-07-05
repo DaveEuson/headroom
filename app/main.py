@@ -29,6 +29,8 @@ DEFAULT_CONFIG = {
     "usage_poll_seconds": 120,
     "battery_poll_seconds": 20,
     "credentials_path": None,
+    "night_start": "22:00",   # when the mascot goes to sleep
+    "night_end": "07:00",     # and when it wakes up
 }
 
 CONTENT_TYPES = {
@@ -58,7 +60,8 @@ def load_config():
 class State:
     """Cached data the poller writes and the HTTP handler reads."""
 
-    def __init__(self):
+    def __init__(self, config=None):
+        self.config = config or DEFAULT_CONFIG
         self.lock = threading.Lock()
         self.usage = None          # {"windows": [...], "plan": ...}
         self.usage_error = None
@@ -74,6 +77,10 @@ class State:
                 "usage_error": self.usage_error,
                 "usage_updated": self.usage_updated,
                 "battery": self.battery if self.battery_present else None,
+                "night": {
+                    "start": self.config.get("night_start", "22:00"),
+                    "end": self.config.get("night_end", "07:00"),
+                },
                 "server_time": time.time(),
             }
 
@@ -101,6 +108,7 @@ def demo_snapshot():
         "usage_error": None,
         "usage_updated": t,
         "battery": {"percent": 76.0, "charging": False, "plugged": False},
+        "night": {"start": "22:00", "end": "07:00"},
         "server_time": t,
     }
 
@@ -213,7 +221,7 @@ def main():
     if args.port:
         config["port"] = args.port
 
-    state = State()
+    state = State(config)
     if not args.demo:
         start_pollers(state, config)
 
