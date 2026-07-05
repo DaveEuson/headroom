@@ -1,19 +1,52 @@
-/* ClaudeTrackerPi — dark appliance dashboard */
+/* ClaudeTrackerPi — Claude-flavored appliance dashboard.
+   Day = claude.ai's warm cream theme; night = its dark warm-gray theme.
+   Brand fonts (Styrene/Tiempos) are named first and fall back to safe
+   lookalikes for anyone who doesn't have them installed. */
 
 :root {
-  --page: #0d0d0d;
-  --surface: #1a1a19;
-  --ink: #ffffff;
-  --ink-2: #c3c2b7;
-  --muted: #898781;
-  --border: rgba(255, 255, 255, 0.10);
+  --font-ui: "Styrene B", "Styrene A", ui-sans-serif, system-ui,
+             -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-display: "Tiempos Text", "Tiempos Headline", Georgia,
+                  "Times New Roman", serif;
 
-  --accent: #d97757;        /* plenty left */
-  --accent-track: #3a2b24;
-  --warn: #fab219;          /* running low */
-  --warn-track: #3a3012;
-  --crit: #e05252;          /* almost out */
-  --crit-track: #3a1d1d;
+  /* day: Claude cream */
+  --page: #f0eee6;
+  --surface: #faf9f5;
+  --ink: #3d3929;
+  --ink-2: #5e594e;
+  --muted: #8a8478;
+  --border: rgba(61, 57, 41, 0.12);
+
+  --accent: #d97757;        /* Claude orange — plenty left */
+  --accent-track: #ebd9ce;
+  --warn: #e8a317;          /* running low */
+  --warn-track: #f0e3c3;
+  --warn-text: #9a6700;
+  --crit: #c4453d;          /* almost out */
+  --crit-track: #efd7d3;
+  --crit-text: #b3372f;
+  --chip: #c15f3c;
+  --banner-bg: #f6e3dd;
+}
+
+body.night {
+  /* night: claude.ai dark */
+  --page: #262624;
+  --surface: #30302e;
+  --ink: #f5f4ef;
+  --ink-2: #cec9be;
+  --muted: #94907e;
+  --border: rgba(245, 244, 239, 0.10);
+
+  --accent-track: #4a382f;
+  --warn: #fab219;
+  --warn-track: #463b1a;
+  --warn-text: #fab219;
+  --crit: #e05252;
+  --crit-track: #4a2727;
+  --crit-text: #e05252;
+  --chip: #d97757;
+  --banner-bg: #4a2727;
 }
 
 * { box-sizing: border-box; }
@@ -22,8 +55,9 @@ body {
   margin: 0;
   background: var(--page);
   color: var(--ink);
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.8s ease, color 0.8s ease;
 }
 
 .wrap {
@@ -38,10 +72,17 @@ body {
 /* ---------- header ---------- */
 
 .top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.top-text h1 { margin: 0; font-size: 1.5rem; letter-spacing: -0.01em; }
+.top-text h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
 
 .clock { margin-left: auto; text-align: right; }
 #clock-time {
+  font-family: var(--font-display);
   font-size: 1.7rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -55,7 +96,7 @@ body {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--accent);
+  color: var(--chip);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 3px 10px;
@@ -68,12 +109,13 @@ body {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 16px;
+  transition: background-color 0.8s ease;
 }
 
 .banner {
-  background: var(--crit-track);
+  background: var(--banner-bg);
   border: 1px solid var(--crit);
-  color: var(--ink-2);
+  color: var(--ink);
   border-radius: 10px;
   padding: 12px 14px;
   font-size: 0.88rem;
@@ -95,7 +137,12 @@ body {
 }
 .win-label { font-size: 0.92rem; color: var(--ink-2); }
 
-.win-value { font-size: 1.35rem; font-weight: 600; white-space: nowrap; }
+.win-value {
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
 .win-value .unit { font-size: 0.8rem; font-weight: 500; color: var(--muted); margin-left: 3px; }
 
 .meter {
@@ -135,15 +182,22 @@ body {
   gap: 5px;
   font-weight: 600;
 }
-.window.low  .state { color: var(--warn); }
-.window.crit .state { color: var(--crit); }
+.window.low  .state { color: var(--warn-text); }
+.window.crit .state { color: var(--crit-text); }
 
 /* ---------- battery ---------- */
 
 .battery { display: flex; flex-direction: column; gap: 8px; }
 .stat { display: flex; justify-content: space-between; align-items: baseline; }
 .stat-label { font-size: 0.92rem; color: var(--ink-2); }
-.stat-value { font-size: 1.35rem; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.stat-value {
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .stat-value .unit { font-size: 0.8rem; font-weight: 500; color: var(--muted); }
 .battery.low  .meter { background: var(--warn-track); }
 .battery.low  .fill  { background: var(--warn); }
@@ -251,13 +305,6 @@ body {
   100% { transform: translate(5px, -14px); opacity: 0; }
 }
 
-/* ---------- night mode ---------- */
-
-body.night { --page: #050505; --surface: #131312; }
-body.night .card, body.night .top-text, body.night .clock, body.night .foot {
-  opacity: 0.82;
-}
-body.night .card { transition: opacity 1s ease; }
 
 @media (prefers-reduced-motion: reduce) {
   .mascot * { animation: none !important; }

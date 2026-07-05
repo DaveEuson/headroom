@@ -8,7 +8,8 @@ A tiny always-on dashboard for your **Claude usage limits**, built for a
   shows how much you have **left**
 - **When each limit resets** — live countdown plus local clock time
 - **PiSugar battery level** (with a charging indicator)
-- A **clock**, and a gentle night mode that dims the screen on a schedule
+- A **clock**, and Claude's own look: the warm cream claude.ai theme by day,
+  its dark theme at night (on a configurable schedule)
 - **Pip**, the tracker's own little mascot — dances while you have plenty of
   usage, gets sweaty when you're running low, panics when you're almost out,
   and puts on a nightcap and sleeps at night
