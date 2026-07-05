@@ -20,10 +20,12 @@ used right now — no terminal, no menubar, no estimating.
 - **A clock**, and Claude's own look: the warm cream claude.ai theme by day,
   its dark theme at night (on a configurable schedule)
 - **PiSugar battery level** with a charging indicator
-- **Pip.** The tracker's little mascot chills in sunglasses between
-  sessions, starts dancing the moment it detects you're actually using
-  Claude, sweats when you're running low, panics when you're almost out,
-  and puts on a nightcap and sleeps at night.
+- **Pip.** The tracker's mascot: a little retro computer. Between sessions
+  it chills with a sunglasses screensaver; the moment it detects you're
+  actually using Claude it starts dancing while code flies across its
+  screen. The screen phosphor turns amber when you're running low and red
+  when you're almost out, and at night it puts on a nightcap and sleeps
+  with a crescent moon on screen.
 
 <p align="center">
   <img src="docs/screenshots/moods.png" width="720" alt="Pip's five moods: chilling, dancing, running low, almost out, and asleep">

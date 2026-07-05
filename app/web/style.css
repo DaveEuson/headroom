@@ -209,33 +209,50 @@ body {
 
 /* ---------- mascot ---------- */
 
-.mascot { flex: none; line-height: 0; }
+.mascot { flex: none; line-height: 0; --phos: #4cd97b; }
 
-.m-body { transform-origin: 60px 63px; }
-.m-arm-l { transform-origin: 27px 68px; }
-.m-arm-r { transform-origin: 93px 68px; }
-.m-leg-l { transform-origin: 46px 94px; }
-.m-leg-r { transform-origin: 74px 94px; }
-.m-sweat, .m-mouth-o, .m-mouth-sleep, .m-eyes-closed, .m-cap, .m-z,
-.m-shades { opacity: 0; }
+.m-body { transform-origin: 60px 60px; }
+.m-arm-l { transform-origin: 22px 46px; }
+.m-arm-r { transform-origin: 98px 46px; }
+.m-leg-l { transform-origin: 44px 88px; }
+.m-leg-r { transform-origin: 76px 88px; }
 
-/* chill (no session running): sunglasses, slow groove */
+/* everything on the screen glows in the current phosphor color */
+.m-phos { fill: var(--phos); }
+.m-phos-s { stroke: var(--phos); }
+.m-sweat, .m-mouth-o, .m-mouth-flat, .m-shades, .m-cap, .m-z,
+.m-code, .m-moon { opacity: 0; }
+
+/* chill (no session running): sunglasses screensaver, slow groove */
 .mood-chill .m-body   { animation: groove 4s ease-in-out infinite; }
 .mood-chill .m-shades { opacity: 1; }
 .mood-chill .m-eyes-open { opacity: 0; }
 
-/* happy (session detected): full dance */
+/* happy (session detected): dances while code types across the screen */
 .mood-happy .m-body   { animation: bounce 0.9s ease-in-out infinite; }
 .mood-happy .m-arm-l  { animation: wave-l 0.9s ease-in-out infinite; }
 .mood-happy .m-arm-r  { animation: wave-r 0.9s ease-in-out infinite; }
 .mood-happy .m-leg-l  { animation: kick-l 0.9s ease-in-out infinite; }
 .mood-happy .m-leg-r  { animation: kick-r 0.9s ease-in-out infinite; }
+.mood-happy .m-face   { opacity: 0; }
+.mood-happy .m-code   { opacity: 1; }
+.mood-happy .m-line   { animation: typing 3.2s linear infinite; }
+.mood-happy .m-l2 { animation-delay: 0.4s; }
+.mood-happy .m-l3 { animation-delay: 0.8s; }
+.mood-happy .m-l4 { animation-delay: 1.2s; }
+.mood-happy .m-l5 { animation-delay: 1.6s; }
+.mood-happy .m-l6 { animation-delay: 2.0s; }
+.mood-happy .m-cursor { animation: cursorblink 1s steps(1) infinite; }
 
-/* worried: slower sway + sweat drop */
+/* worried: amber screen, flat mouth, sway + sweat drop */
+.mood-worried { --phos: #fab219; }
 .mood-worried .m-body  { animation: sway 1.6s ease-in-out infinite; }
 .mood-worried .m-sweat { opacity: 1; animation: drip 1.6s ease-in infinite; }
+.mood-worried .m-mouth-smile { opacity: 0; }
+.mood-worried .m-mouth-flat  { opacity: 1; }
 
-/* panic: shake, o-mouth, sweat */
+/* panic: red screen, o-mouth, shake, sweat */
+.mood-panic { --phos: #ff6f61; }
 .mood-panic .m-body  { animation: shake 0.35s linear infinite; }
 .mood-panic .m-sweat { opacity: 1; animation: drip 0.8s ease-in infinite; }
 .mood-panic .m-mouth-smile { opacity: 0; }
@@ -245,14 +262,11 @@ body {
 .mood-panic .m-leg-l { animation: kick-l 0.35s linear infinite; }
 .mood-panic .m-leg-r { animation: kick-r 0.35s linear infinite; }
 
-/* asleep (at night): nightcap, closed eyes, slow breathing, floating Zzz */
-.mood-sleep .m-body    { animation: breathe 4s ease-in-out infinite; }
-.mood-sleep .m-cap     { opacity: 1; }
-.mood-sleep .m-antenna { opacity: 0; }
-.mood-sleep .m-eyes-open   { opacity: 0; }
-.mood-sleep .m-eyes-closed { opacity: 1; }
-.mood-sleep .m-mouth-smile { opacity: 0; }
-.mood-sleep .m-mouth-sleep { opacity: 1; }
+/* asleep (at night): nightcap, moon on screen, slow breathing, Zzz */
+.mood-sleep .m-body { animation: breathe 4s ease-in-out infinite; }
+.mood-sleep .m-cap  { opacity: 1; }
+.mood-sleep .m-face { opacity: 0; }
+.mood-sleep .m-moon { opacity: 1; }
 .mood-sleep .m-z1 { animation: zfloat 4s linear infinite; }
 .mood-sleep .m-z2 { animation: zfloat 4s linear 1.3s infinite; }
 .mood-sleep .m-z3 { animation: zfloat 4s linear 2.6s infinite; }
@@ -300,6 +314,16 @@ body {
   0%   { transform: translateY(0); opacity: 0; }
   30%  { opacity: 1; }
   100% { transform: translateY(14px); opacity: 0; }
+}
+@keyframes typing {
+  0%   { opacity: 0; }
+  6%   { opacity: 1; }
+  88%  { opacity: 1; }
+  94%, 100% { opacity: 0; }
+}
+@keyframes cursorblink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
 }
 @keyframes groove {
   0%, 100% { transform: rotate(-2.5deg) translateY(0); }
