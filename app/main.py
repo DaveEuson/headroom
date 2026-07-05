@@ -33,6 +33,10 @@ DEFAULT_CONFIG = {
     "night_end": "07:00",     # and when it wakes up
 }
 
+# How long after the last observed usage increase we still call the
+# session "active" (Pip keeps dancing between messages).
+ACTIVE_SECONDS = 900
+
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
@@ -68,6 +72,8 @@ class State:
         self.usage_updated = None  # epoch seconds
         self.battery = None
         self.battery_present = True
+        self.prev_utilization = None  # {window key: utilization} from last poll
+        self.last_activity = 0.0      # when utilization last went up
 
     def snapshot(self):
         with self.lock:
@@ -77,6 +83,10 @@ class State:
                 "usage_error": self.usage_error,
                 "usage_updated": self.usage_updated,
                 "battery": self.battery if self.battery_present else None,
+                "session_active": bool(
+                    self.last_activity
+                    and time.time() - self.last_activity < ACTIVE_SECONDS
+                ),
                 "night": {
                     "start": self.config.get("night_start", "22:00"),
                     "end": self.config.get("night_end", "07:00"),
@@ -108,6 +118,7 @@ def demo_snapshot():
         "usage_error": None,
         "usage_updated": t,
         "battery": {"percent": 76.0, "charging": False, "plugged": False},
+        "session_active": True,
         "night": {"start": "22:00", "end": "07:00"},
         "server_time": t,
     }
@@ -130,7 +141,19 @@ def start_pollers(state, config):
             else:
                 try:
                     usage = anthropic_usage.fetch_usage(path)
+                    now_util = {
+                        w["key"]: w["utilization"] for w in usage["windows"]
+                    }
                     with state.lock:
+                        prev = state.prev_utilization
+                        if prev is not None and any(
+                            prev.get(key) is None or value > prev[key] + 0.01
+                            for key, value in now_util.items()
+                        ):
+                            # usage went up (or a new window appeared) since
+                            # the last poll -> someone is talking to Claude
+                            state.last_activity = time.time()
+                        state.prev_utilization = now_util
                         state.usage = usage
                         state.usage_error = None
                         state.usage_updated = time.time()

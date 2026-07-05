@@ -10,9 +10,10 @@ A tiny always-on dashboard for your **Claude usage limits**, built for a
 - **PiSugar battery level** (with a charging indicator)
 - A **clock**, and Claude's own look: the warm cream claude.ai theme by day,
   its dark theme at night (on a configurable schedule)
-- **Pip**, the tracker's own little mascot — dances while you have plenty of
-  usage, gets sweaty when you're running low, panics when you're almost out,
-  and puts on a nightcap and sleeps at night
+- **Pip**, the tracker's own little mascot — chills in sunglasses between
+  sessions, starts dancing when it detects you're actively using Claude,
+  gets sweaty when you're running low, panics when you're almost out, and
+  puts on a nightcap and sleeps at night
 
 No pip installs, no Node, no database — one Python 3 standard-library process
 serving one page. It runs happily in a few MB of RAM on the Zero 2 W, and you
@@ -98,6 +99,9 @@ chromium-browser --kiosk --app=http://localhost:8080
 - The meters turn amber under 30% left and red under 10% — same for the
   mascot's mood. Day/night uses the browser's clock (add `?night=1` to the
   URL to preview night mode).
+- "Session detected" means usage went up between two polls; Pip keeps
+  dancing for 15 minutes after the last increase, then goes back to
+  chilling (`?active=1` / `?active=0` to preview).
 
 ## Troubleshooting
 

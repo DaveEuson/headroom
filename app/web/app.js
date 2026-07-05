@@ -5,8 +5,11 @@ const POLL_MS = 30000;
 let latest = null; // last /api/status payload
 let night = { start: "22:00", end: "07:00" }; // overwritten from server config
 
-// ?night=1 / ?night=0 forces night/day (handy for testing)
-const FORCE_NIGHT = new URLSearchParams(location.search).get("night");
+// ?night=1 / ?night=0 forces night/day, ?active=1 / ?active=0 forces the
+// session-detected state (both handy for testing)
+const PARAMS = new URLSearchParams(location.search);
+const FORCE_NIGHT = PARAMS.get("night");
+const FORCE_ACTIVE = PARAMS.get("active");
 
 function parseHM(text, fallback) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(text || "").trim());
@@ -119,9 +122,15 @@ function renderBattery(battery) {
   card.classList.toggle("low", pct > 10 && pct <= 25);
 }
 
+function sessionActive() {
+  if (FORCE_ACTIVE !== null) return FORCE_ACTIVE === "1";
+  return !!(latest && latest.session_active);
+}
+
 function renderMood(windows) {
   const mascot = el("mascot");
-  let mood = "happy";
+  // dances only while a session is being used; chills between sessions
+  let mood = sessionActive() ? "happy" : "chill";
   if (isNight()) {
     mood = "sleep"; // Pip sleeps at night no matter what
   } else if (windows.length) {

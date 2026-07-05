@@ -216,9 +216,15 @@ body {
 .m-arm-r { transform-origin: 93px 68px; }
 .m-leg-l { transform-origin: 46px 94px; }
 .m-leg-r { transform-origin: 74px 94px; }
-.m-sweat, .m-mouth-o, .m-mouth-sleep, .m-eyes-closed, .m-cap, .m-z { opacity: 0; }
+.m-sweat, .m-mouth-o, .m-mouth-sleep, .m-eyes-closed, .m-cap, .m-z,
+.m-shades { opacity: 0; }
 
-/* happy: full dance */
+/* chill (no session running): sunglasses, slow groove */
+.mood-chill .m-body   { animation: groove 4s ease-in-out infinite; }
+.mood-chill .m-shades { opacity: 1; }
+.mood-chill .m-eyes-open { opacity: 0; }
+
+/* happy (session detected): full dance */
 .mood-happy .m-body   { animation: bounce 0.9s ease-in-out infinite; }
 .mood-happy .m-arm-l  { animation: wave-l 0.9s ease-in-out infinite; }
 .mood-happy .m-arm-r  { animation: wave-r 0.9s ease-in-out infinite; }
@@ -294,6 +300,10 @@ body {
   0%   { transform: translateY(0); opacity: 0; }
   30%  { opacity: 1; }
   100% { transform: translateY(14px); opacity: 0; }
+}
+@keyframes groove {
+  0%, 100% { transform: rotate(-2.5deg) translateY(0); }
+  50%      { transform: rotate(2.5deg) translateY(-2px); }
 }
 @keyframes breathe {
   0%, 100% { transform: scale(1, 1); }
