@@ -105,6 +105,11 @@ sudo apt install -y chromium-browser
 chromium-browser --kiosk --app=http://localhost:8080
 ```
 
+The layout compacts itself to fit the common small panels (800×480 and
+480×320) with no scrolling. Heads-up: Chromium is heavy for the Zero 2 W's
+512 MB of RAM — it works, but give it a minute to start. Checking from
+your phone's browser is always the snappy option.
+
 ## How it works
 
 - `app/anthropic_usage.py` calls the same usage endpoint Claude Code's

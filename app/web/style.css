@@ -343,3 +343,43 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .mascot * { animation: none !important; }
 }
+
+/* ---------- small screens (5" Pi panels, 800x480 and under) ---------- */
+
+@media (max-height: 620px) {
+  .wrap { padding: 10px 12px 12px; gap: 9px; }
+  .top { gap: 10px; }
+  .mascot svg { width: 66px; height: 73px; }
+  .top-text h1 { font-size: 1.1rem; }
+  .sub { margin-top: 2px; gap: 7px; }
+  .chip { font-size: 0.62rem; padding: 2px 8px; }
+  .muted { font-size: 0.72rem; }
+  #clock-time { font-size: 1.3rem; }
+  .card { padding: 10px 14px; border-radius: 11px; }
+  .meters { gap: 9px; }
+  .window { gap: 3px; }
+  .win-label, .stat-label { font-size: 0.8rem; }
+  .win-value, .stat-value { font-size: 1.08rem; }
+  .meter { height: 10px; border-radius: 5px; }
+  .meter.mini { height: 6px; }
+  .win-foot { font-size: 0.7rem; }
+  .battery { gap: 4px; }
+  .foot { display: none; }
+}
+
+/* ---------- tiny screens (3.5" panels, 480x320) ---------- */
+
+@media (max-height: 380px) {
+  .wrap { padding: 6px 10px 8px; gap: 6px; }
+  .mascot svg { width: 48px; height: 53px; }
+  .top-text h1 { font-size: 0.95rem; }
+  #clock-time { font-size: 1.05rem; }
+  #clock-date { display: none; }
+  .card { padding: 7px 12px; }
+  .meters { gap: 5px; }
+  .window { gap: 2px; }
+  .meter { height: 8px; }
+  .win-value, .stat-value { font-size: 0.95rem; }
+  .win-foot { font-size: 0.64rem; }
+  .banner { padding: 6px 10px; font-size: 0.72rem; }
+}
