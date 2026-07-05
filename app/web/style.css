@@ -211,6 +211,20 @@ body {
 
 .mascot { flex: none; line-height: 0; --phos: #4cd97b; }
 
+/* sprite mode: custom PNG artwork replaces the built-in vector Pip;
+   the whole image gets the mood's body animation */
+.mascot.sprite img {
+  width: 104px;
+  height: auto;
+  display: block;
+  transform-origin: 50% 90%;
+}
+.sprite.mood-happy img   { animation: bounce 0.9s ease-in-out infinite; }
+.sprite.mood-chill img   { animation: groove 4s ease-in-out infinite; }
+.sprite.mood-worried img { animation: sway 1.6s ease-in-out infinite; }
+.sprite.mood-panic img   { animation: shake 0.35s linear infinite; }
+.sprite.mood-sleep img   { animation: breathe 4s ease-in-out infinite; }
+
 .m-body { transform-origin: 60px 60px; }
 .m-arm-l { transform-origin: 22px 46px; }
 .m-arm-r { transform-origin: 98px 46px; }
@@ -350,6 +364,7 @@ body {
   .wrap { padding: 10px 12px 12px; gap: 9px; }
   .top { gap: 10px; }
   .mascot svg { width: 66px; height: 73px; }
+  .mascot.sprite img { width: 66px; height: auto; }
   .top-text h1 { font-size: 1.1rem; }
   .sub { margin-top: 2px; gap: 7px; }
   .chip { font-size: 0.62rem; padding: 2px 8px; }
@@ -372,6 +387,7 @@ body {
 @media (max-height: 380px) {
   .wrap { padding: 6px 10px 8px; gap: 6px; }
   .mascot svg { width: 48px; height: 53px; }
+  .mascot.sprite img { width: 48px; height: auto; }
   .top-text h1 { font-size: 0.95rem; }
   #clock-time { font-size: 1.05rem; }
   #clock-date { display: none; }

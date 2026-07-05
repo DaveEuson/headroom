@@ -11,8 +11,13 @@ device, we log one line and let the web dashboard carry on alone.
 """
 
 import datetime
+import os
 import sys
 import time
+
+SPRITE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "web", "img", "pip")
+SPRITE_BOX = (150, 92)   # sprites are scaled to fit this area on the LCD
 
 WIDTH, HEIGHT = 240, 280
 Y_OFFSET = 20            # the 240x280 panel sits 20 rows into 240x320 RAM
@@ -116,6 +121,24 @@ class ST7789:
 
 
 # ---------------------------------------------------------------- rendering
+
+def _load_sprites():
+    """Load custom mascot art (app/web/img/pip/*.png) if the user added it."""
+    from PIL import Image
+
+    sprites = {}
+    for mood in ("happy", "chill", "worried", "panic", "sleep"):
+        path = os.path.join(SPRITE_DIR, f"{mood}.png")
+        if not os.path.isfile(path):
+            continue
+        try:
+            img = Image.open(path).convert("RGBA")
+            img.thumbnail(SPRITE_BOX, Image.LANCZOS)
+            sprites[mood] = img
+        except OSError:
+            pass
+    return sprites
+
 
 def _load_fonts():
     from PIL import ImageFont
@@ -246,7 +269,7 @@ def _draw_pip(draw, mood, frame, theme):
         draw.ellipse((166, 58 + dy, 172, 67 + dy), fill=SWEAT)
 
 
-def render(snapshot, frame, fonts):
+def render(snapshot, frame, fonts, sprites=None):
     from PIL import Image, ImageDraw
 
     night = _is_night(snapshot)
@@ -271,7 +294,13 @@ def render(snapshot, frame, fonts):
         draw.rounded_rectangle((186, 30, 186 + max(3, int(44 * pct / 100)),
                                 37), 3, fill=color)
 
-    _draw_pip(draw, mood, frame, theme)
+    sprite = (sprites or {}).get(mood)
+    if sprite:
+        bounce = -3 if (mood in ("happy", "panic") and frame % 2) else 0
+        img.paste(sprite, (120 - sprite.width // 2,
+                           92 - sprite.height // 2 + bounce), sprite)
+    else:
+        _draw_pip(draw, mood, frame, theme)
 
     # meters (first three windows) or the error banner
     error = snapshot.get("usage_error")
@@ -325,10 +354,11 @@ def run(snapshot_fn, config):
               "web dashboard still available.", file=sys.stderr)
         return
     fonts = _load_fonts()
+    sprites = _load_sprites()
     frame = 0
     while True:
         try:
-            panel.show(render(snapshot_fn(), frame, fonts))
+            panel.show(render(snapshot_fn(), frame, fonts, sprites))
         except Exception as exc:
             print(f"HAT display error: {exc}", file=sys.stderr)
             time.sleep(10)

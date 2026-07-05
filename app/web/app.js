@@ -127,6 +127,23 @@ function sessionActive() {
   return !!(latest && latest.session_active);
 }
 
+// If custom artwork exists (app/web/img/pip/*.png), swap the built-in
+// vector Pip for the sprites; otherwise the SVG stays.
+const MOODS = ["happy", "chill", "worried", "panic", "sleep"];
+let spriteMode = false;
+(function detectSprites() {
+  const probe = new Image();
+  probe.onload = () => {
+    spriteMode = true;
+    MOODS.forEach((m) => { new Image().src = `img/pip/${m}.png`; }); // warm cache
+    const mascot = el("mascot");
+    mascot.classList.add("sprite");
+    mascot.innerHTML = '<img id="mascot-img" alt="" src="img/pip/happy.png">';
+    if (latest) renderMood(latest.windows || []);
+  };
+  probe.src = "img/pip/happy.png";
+})();
+
 function renderMood(windows) {
   const mascot = el("mascot");
   // dances only while a session is being used; chills between sessions
@@ -138,8 +155,13 @@ function renderMood(windows) {
     if (minRemaining <= 10) mood = "panic";
     else if (minRemaining <= 30) mood = "worried";
   }
-  const cls = "mascot mood-" + mood;
+  const cls = "mascot mood-" + mood + (spriteMode ? " sprite" : "");
   if (mascot.className !== cls) mascot.className = cls;
+  if (spriteMode) {
+    const img = el("mascot-img");
+    const src = `img/pip/${mood}.png`;
+    if (img && !img.src.endsWith(src)) img.src = src;
+  }
 }
 
 function renderClock() {

@@ -148,6 +148,15 @@ your phone's browser is always the snappy option.
   safe fallbacks (Georgia / system sans), so nothing is downloaded and
   nothing needs a license.
 
+## Custom mascot art (optional)
+
+Like Pip but want fancier artwork? Drop five transparent PNGs named
+`happy.png`, `chill.png`, `worried.png`, `panic.png`, `sleep.png` into
+`app/web/img/pip/` and restart — both the web dashboard and the HAT LCD
+switch to them automatically (the built-in vector Pip stays as fallback if
+any are missing). `scripts/slice-mascot.py` cuts a generated character
+sheet into individual transparent sprites for you.
+
 ## Troubleshooting
 
 ```bash
