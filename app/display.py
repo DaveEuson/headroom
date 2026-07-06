@@ -59,6 +59,32 @@ SWEAT = (124, 196, 250)
 CAP, CAP_BAND, POMPOM = (109, 91, 208), (133, 119, 224), (242, 239, 233)
 
 
+def _to_rgb565(image):
+    """Pack a PIL image into big-endian RGB565 bytes for the ST7789.
+
+    Uses numpy when available (fast); falls back to pure Python so the
+    display still works if numpy isn't installed.
+    """
+    image = image.convert("RGB")
+    try:
+        import numpy as np
+
+        arr = np.asarray(image, dtype=np.uint16)
+        r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+        rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+        return rgb565.astype(">u2").tobytes()   # big-endian, high byte first
+    except ImportError:
+        rgb = image.tobytes()
+        out = bytearray((len(rgb) // 3) * 2)
+        for i in range(0, len(rgb), 3):
+            v = (((rgb[i] & 0xF8) << 8) | ((rgb[i + 1] & 0xFC) << 3)
+                 | (rgb[i + 2] >> 3))
+            j = (i // 3) * 2
+            out[j] = v >> 8
+            out[j + 1] = v & 0xFF
+        return bytes(out)
+
+
 class ST7789:
     """Minimal driver for the Whisplay's LCD, matching the vendor init."""
 
@@ -108,10 +134,7 @@ class ST7789:
         self._cmd(0x2A, 0, 0, (WIDTH - 1) >> 8, (WIDTH - 1) & 0xFF)
         self._cmd(0x2B, y0 >> 8, y0 & 0xFF, y1 >> 8, y1 & 0xFF)
         self._cmd(0x2C)
-        raw = image.convert("RGB").tobytes("raw", "RGB;16")
-        buf = bytearray(len(raw))           # swap to the panel's big-endian
-        buf[0::2] = raw[1::2]
-        buf[1::2] = raw[0::2]
+        buf = _to_rgb565(image)
         self.dc.on()
         try:
             self.spi.writebytes2(buf)

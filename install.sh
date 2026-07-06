@@ -20,7 +20,7 @@ fi
 # Whisplay HAT LCD support (harmless if no HAT is attached)
 if command -v apt-get >/dev/null; then
   echo "Installing display libraries (python3-pil, spidev, gpiozero)..."
-  sudo apt-get install -y -qq python3-pil python3-spidev python3-gpiozero || true
+  sudo apt-get install -y -qq python3-pil python3-numpy python3-spidev python3-gpiozero || true
 fi
 if command -v raspi-config >/dev/null; then
   sudo raspi-config nonint do_spi 0 || true   # enable SPI for the LCD
