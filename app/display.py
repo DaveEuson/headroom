@@ -94,7 +94,10 @@ class ST7789:
 
         self.dc = DigitalOutputDevice(DC_PIN)
         self.rst = DigitalOutputDevice(RST_PIN, initial_value=True)
-        self.backlight = DigitalOutputDevice(BL_PIN, initial_value=True)
+        # Whisplay backlight is ACTIVE-LOW (pin LOW = lit). active_high=False
+        # makes initial_value=True drive the pin low, i.e. backlight on.
+        self.backlight = DigitalOutputDevice(
+            BL_PIN, active_high=False, initial_value=True)
         self.spi = spidev.SpiDev()
         self.spi.open(0, 0)
         self.spi.max_speed_hz = SPI_HZ
