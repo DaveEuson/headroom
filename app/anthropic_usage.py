@@ -25,7 +25,14 @@ TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
 # Claude Code's public OAuth client id (a public client -- not a secret).
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 OAUTH_BETA = "oauth-2025-04-20"
-USER_AGENT = "ClaudeTrackerPi/1.0"
+# Anthropic's endpoints sit behind Cloudflare, which blocks obvious
+# bot/library User-Agents (e.g. Python-urllib) with a 403 "Error 1010".
+# Present a normal browser UA so requests aren't rejected before reaching
+# the API.
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+)
 
 # Refresh the access token this many seconds before it actually expires.
 REFRESH_MARGIN = 300

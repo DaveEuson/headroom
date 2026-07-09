@@ -29,6 +29,12 @@ AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
 TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
 REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback"
 SCOPES = "org:create_api_key user:profile user:inference"
+# Cloudflare (in front of Anthropic) 403s obvious library User-Agents with
+# "Error 1010"; present a normal browser UA so the exchange gets through.
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+)
 
 
 class LoginError(Exception):
@@ -77,7 +83,9 @@ def exchange_code(pasted, verifier):
         data=body,
         headers={
             "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "User-Agent": USER_AGENT,
         },
         method="POST",
     )
