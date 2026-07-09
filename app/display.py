@@ -295,11 +295,102 @@ def _draw_pip(draw, mood, frame, theme):
         draw.ellipse((166, 58 + dy, 172, 67 + dy), fill=SWEAT)
 
 
-def render(snapshot, frame, fonts, sprites=None):
+_SETUP_HINTS = ("credential", "sign-in", "sign in", "log in", "login",
+                "access token", "re-copy", "not logged in")
+
+
+def _needs_setup(snapshot):
+    """True when the tracker has no working Claude login yet."""
+    if snapshot.get("windows"):
+        return False
+    err = (snapshot.get("usage_error") or "").lower()
+    return any(hint in err for hint in _SETUP_HINTS)
+
+
+def _lan_ip():
+    """Best-effort LAN IP of this Pi (no packets are actually sent)."""
+    import socket
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+        finally:
+            sock.close()
+    except OSError:
+        return None
+
+
+def _local_url(config):
+    """URL of this Pi's dashboard, for the setup QR code."""
+    port = int((config or {}).get("port", 8080))
+    ip = _lan_ip()
+    if ip:
+        return f"http://{ip}:{port}"
+    import socket
+    try:
+        return f"http://{socket.gethostname()}.local:{port}"
+    except OSError:
+        return None
+
+
+def _qr_image(data, target=150):
+    """Render `data` as a QR code PIL image ~target px wide, or None."""
+    try:
+        import qrcode
+    except ImportError:
+        return None
+    try:
+        from PIL import Image
+        qr = qrcode.QRCode(border=2, box_size=1,
+                           error_correction=qrcode.constants.ERROR_CORRECT_M)
+        qr.add_data(data)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color=(15, 15, 15),
+                            back_color=(255, 255, 255)).convert("RGB")
+    except Exception:
+        return None
+    if img.width and img.width < target:
+        scale = max(1, target // img.width)
+        img = img.resize((img.width * scale, img.height * scale), Image.NEAREST)
+    return img
+
+
+def _center(draw, text, y, font, fill):
+    w = draw.textlength(text, font=font)
+    draw.text(((WIDTH - w) / 2, y), text, font=font, fill=fill)
+
+
+def _render_setup(theme, fonts, url):
+    """First-run screen: a QR code that opens the dashboard on a phone."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
+    draw = ImageDraw.Draw(img)
+    _center(draw, "Set me up", 14, fonts["clock"], theme["ink"])
+    _center(draw, "Scan with your phone", 54, fonts["label"], theme["muted"])
+    qr = _qr_image(url, 150) if url else None
+    if qr:
+        img.paste(qr, ((WIDTH - qr.width) // 2, 78))
+        yb = 78 + qr.height + 8
+    else:
+        yb = 150
+    if url:
+        _center(draw, url.replace("http://", ""), yb, fonts["small"],
+                theme["ink"])
+    else:
+        _center(draw, "connect the Pi to Wi-Fi first", yb, fonts["small"],
+                theme["muted"])
+    return img
+
+
+def render(snapshot, frame, fonts, sprites=None, setup_url=None):
     from PIL import Image, ImageDraw
 
     night = _is_night(snapshot)
     theme = THEMES["night" if night else "day"]
+    if _needs_setup(snapshot):
+        return _render_setup(theme, fonts, setup_url)
     mood = _mood(snapshot, night)
     img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
     draw = ImageDraw.Draw(img)
@@ -381,10 +472,13 @@ def run(snapshot_fn, config):
         return
     fonts = _load_fonts()
     sprites = _load_sprites()
+    setup_url = _local_url(config)
     frame = 0
     while True:
+        if frame % 60 == 0:  # refresh in case the IP changed / came up late
+            setup_url = _local_url(config) or setup_url
         try:
-            panel.show(render(snapshot_fn(), frame, fonts, sprites))
+            panel.show(render(snapshot_fn(), frame, fonts, sprites, setup_url))
         except Exception as exc:
             print(f"HAT display error: {exc}", file=sys.stderr)
             time.sleep(10)

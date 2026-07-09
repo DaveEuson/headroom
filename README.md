@@ -23,6 +23,9 @@ used right now — no terminal, no menubar, no estimating.
 - **Whisplay HAT support** — draws a compact version of the dashboard
   right on the PiSugar Whisplay's 1.69″ LCD (240×280, ST7789), no browser
   or desktop needed on the Pi
+- **QR-code setup** — until it has your Claude login, the HAT screen shows a
+  "Set me up" screen with a QR code; scan it with your phone to open the
+  dashboard, no hunting for the Pi's address
 - **Pip.** The tracker's mascot: a little retro computer. Between sessions
   it chills with a sunglasses screensaver; the moment it detects you're
   actually using Claude it starts dancing while code flies across its
