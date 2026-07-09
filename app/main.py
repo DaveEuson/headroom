@@ -8,6 +8,7 @@ Standard library only, sized for a Pi Zero 2 W.
 
 import argparse
 import datetime
+import html
 import json
 import math
 import os
@@ -20,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import anthropic_usage
 import display
+import oauth_login
 import pisugar
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -76,6 +78,7 @@ class State:
         self.battery_present = True
         self.prev_utilization = None  # {window key: utilization} from last poll
         self.last_activity = 0.0      # when utilization last went up
+        self.pending_verifier = None  # PKCE verifier during phone sign-in
 
     def snapshot(self):
         with self.lock:
@@ -134,9 +137,8 @@ def start_pollers(state, config):
             path = anthropic_usage.find_credentials_path(creds_configured)
             if path is None:
                 message = (
-                    "No Claude credentials found on this Pi. Run "
-                    "scripts/send-credentials.sh from the computer where you "
-                    "use Claude Code (see README)."
+                    "Not connected to Claude yet — open this dashboard and "
+                    "tap 'Sign in with Claude'."
                 )
                 with state.lock:
                     state.usage_error = message
@@ -187,6 +189,137 @@ def start_pollers(state, config):
         threading.Thread(target=target, daemon=True).start()
 
 
+def _creds_write_path(config):
+    configured = (config or {}).get("credentials_path")
+    if configured:
+        return os.path.expanduser(configured)
+    return os.path.expanduser("~/.claude-tracker/credentials.json")
+
+
+def complete_login(state, code):
+    """Exchange a pasted code, save credentials, and refresh usage now.
+
+    Returns the plan name on success. Raises oauth_login.LoginError on
+    anything the user can fix (bad/expired code, expired session).
+    """
+    verifier = state.pending_verifier
+    if not verifier:
+        raise oauth_login.LoginError(
+            "This sign-in link expired. Reload the page and try again."
+        )
+    oauth = oauth_login.exchange_code(code, verifier)
+    path = _creds_write_path(state.config)
+    oauth_login.save_credentials(oauth, path)
+    with state.lock:
+        state.pending_verifier = None
+    try:
+        usage = anthropic_usage.fetch_usage(path)
+        with state.lock:
+            state.usage = usage
+            state.usage_error = None
+            state.usage_updated = time.time()
+            state.prev_utilization = {
+                w["key"]: w["utilization"] for w in usage["windows"]
+            }
+        return (usage or {}).get("plan")
+    except anthropic_usage.UsageError as exc:
+        # Signed in fine, but the first usage read didn't land; the poller
+        # will retry shortly. Don't treat this as a sign-in failure.
+        with state.lock:
+            state.usage_error = str(exc)
+        return None
+
+
+CONNECT_PAGE = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect Claude</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px 18px 40px; font-family:system-ui,-apple-system,
+    "Segoe UI",sans-serif; background:#f0eee6; color:#3d3929; line-height:1.5; }
+  @media (prefers-color-scheme: dark) {
+    body { background:#262624; color:#f5f4ef; }
+    .card { background:#30302e !important; border-color:rgba(245,244,239,.1) !important; }
+    input { background:#1a1a19 !important; color:#f5f4ef !important;
+      border-color:rgba(245,244,239,.2) !important; }
+    .muted { color:#94907e !important; }
+  }
+  .wrap { max-width:460px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  .muted { color:#8a8478; font-size:.9rem; }
+  .card { background:#faf9f5; border:1px solid rgba(61,57,41,.12);
+    border-radius:14px; padding:18px; margin-top:16px; }
+  .step { font-weight:600; font-size:.8rem; text-transform:uppercase;
+    letter-spacing:.05em; color:#c15f3c; margin-bottom:8px; }
+  .btn { display:block; width:100%; text-align:center; text-decoration:none;
+    background:#d97757; color:#fff; font-weight:600; font-size:1.05rem;
+    padding:14px; border-radius:10px; border:none; cursor:pointer; }
+  .btn:active { filter:brightness(.94); }
+  input { width:100%; padding:12px; font-size:1rem; border-radius:10px;
+    border:1px solid rgba(61,57,41,.25); background:#fff; margin-bottom:12px; }
+  #msg { margin-top:14px; font-size:.95rem; }
+  .ok { color:#0f7b3f; font-weight:600; }
+  .err { color:#c4453d; font-weight:600; }
+  a.back { color:#c15f3c; }
+</style></head>
+<body><div class="wrap">
+  <h1>Connect your Claude account</h1>
+  <p class="muted">Sign in once so the tracker can read your usage limits.
+     You can do this right here on your phone.</p>
+
+  <div class="card">
+    <div class="step">Step 1</div>
+    <a class="btn" href="__AUTH_URL__" target="_blank" rel="noopener">
+      Sign in with Claude</a>
+    <p class="muted" style="margin:12px 0 0">Opens claude.ai. After you approve,
+       Claude shows you a code — copy the whole thing.</p>
+  </div>
+
+  <div class="card">
+    <div class="step">Step 2</div>
+    <form id="f" onsubmit="return finish(event)">
+      <input id="code" placeholder="Paste the code here"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="btn" type="submit" id="go">Finish setup</button>
+    </form>
+    <div id="msg"></div>
+  </div>
+
+  <p class="muted" style="margin-top:18px">
+    <a class="back" href="/">&larr; Back to dashboard</a></p>
+</div>
+<script>
+async function finish(e){
+  e.preventDefault();
+  var msg=document.getElementById('msg'), go=document.getElementById('go');
+  var code=document.getElementById('code').value.trim();
+  if(!code){ msg.innerHTML='<span class="err">Paste the code first.</span>'; return false; }
+  go.disabled=true; msg.textContent='Connecting…';
+  try{
+    var r=await fetch('/api/connect',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code})});
+    var d=await r.json();
+    if(d.ok){
+      msg.innerHTML='<span class="ok">You\\'re connected!'+
+        (d.plan?(' ('+d.plan+' plan)'):'')+'</span> Redirecting…';
+      setTimeout(function(){location.href='/';},1500);
+    } else {
+      go.disabled=false;
+      msg.innerHTML='<span class="err">'+(d.error||'Sign-in failed.')+'</span>';
+    }
+  }catch(err){
+    go.disabled=false;
+    msg.innerHTML='<span class="err">Could not reach the tracker. Try again.</span>';
+  }
+  return false;
+}
+</script>
+</body></html>"""
+
+
 def make_handler(state, demo):
     class Handler(BaseHTTPRequestHandler):
         server_version = "ClaudeTrackerPi/1.0"
@@ -197,9 +330,52 @@ def make_handler(state, demo):
                 snapshot = demo_snapshot() if demo else state.snapshot()
                 self._send_json(snapshot)
                 return
+            if path == "/connect":
+                self._send_connect_page()
+                return
             if path == "/":
                 path = "/index.html"
             self._send_file(path.lstrip("/"))
+
+        def do_POST(self):
+            path = self.path.split("?", 1)[0]
+            if path == "/api/connect":
+                self._handle_connect()
+                return
+            self.send_error(404)
+
+        def _send_connect_page(self):
+            url, verifier = oauth_login.start_login()
+            with state.lock:
+                state.pending_verifier = verifier
+            body = CONNECT_PAGE.replace("__AUTH_URL__", html.escape(url, quote=True))
+            body = body.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _handle_connect(self):
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                data = json.loads(raw.decode("utf-8") or "{}")
+            except ValueError:
+                data = {}
+            if demo:
+                self._send_json({"ok": False,
+                                 "error": "Sign-in is disabled in demo mode."})
+                return
+            try:
+                plan = complete_login(state, data.get("code", ""))
+                self._send_json({"ok": True, "plan": plan})
+            except oauth_login.LoginError as exc:
+                self._send_json({"ok": False, "error": str(exc)})
+            except Exception as exc:  # never crash the handler
+                self._send_json({"ok": False,
+                                 "error": f"Unexpected error: {exc}"})
 
         def _send_json(self, payload):
             body = json.dumps(payload).encode("utf-8")

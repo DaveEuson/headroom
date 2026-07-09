@@ -194,7 +194,20 @@ function render(data) {
   }
   const banner = el("error");
   banner.hidden = !data.usage_error;
-  if (data.usage_error) banner.textContent = data.usage_error;
+  if (data.usage_error) {
+    const noWindows = !(data.windows && data.windows.length);
+    const needsSetup = noWindows &&
+      /credential|sign-?in|log ?in|access token|not connected/i.test(data.usage_error);
+    if (needsSetup) {
+      banner.classList.add("setup");
+      banner.innerHTML =
+        '<span>Not connected to Claude yet.</span>' +
+        '<a class="connect-btn" href="/connect">Sign in with Claude →</a>';
+    } else {
+      banner.classList.remove("setup");
+      banner.textContent = data.usage_error;
+    }
+  }
 
   const plan = el("plan");
   plan.hidden = !data.plan;

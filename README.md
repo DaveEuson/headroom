@@ -23,9 +23,10 @@ used right now — no terminal, no menubar, no estimating.
 - **Whisplay HAT support** — draws a compact version of the dashboard
   right on the PiSugar Whisplay's 1.69″ LCD (240×280, ST7789), no browser
   or desktop needed on the Pi
-- **QR-code setup** — until it has your Claude login, the HAT screen shows a
-  "Set me up" screen with a QR code; scan it with your phone to open the
-  dashboard, no hunting for the Pi's address
+- **QR-code setup + phone sign-in** — until it has your Claude login, the HAT
+  screen shows a "Set me up" QR code; scan it, tap **Sign in with Claude**, and
+  authenticate right on your phone (OAuth, the same login Claude Code uses) —
+  no computer, no scripts, no files to copy
 - **Pip.** The tracker's mascot: a little retro computer. Between sessions
   it chills with a sunglasses screensaver; the moment it detects you're
   actually using Claude it starts dancing while code flies across its
@@ -55,22 +56,22 @@ cd ClaudeTrackerPi
 That creates a `claude-tracker` systemd service that starts on boot. The
 installer prints your dashboard URL, e.g. `http://raspberrypi.local:8080`.
 
-### 2. On the computer where you use Claude Code
+### 2. Sign in from your phone
 
-The tracker reads your limits with the same sign-in Claude Code uses. Copy
-your credentials to the Pi with the helper script (works on macOS and Linux):
+Open the dashboard (the HAT screen shows a QR code, or go to the URL the
+installer printed) and tap **Sign in with Claude**. That opens claude.ai;
+approve, copy the code it shows you, paste it back into the dashboard, and
+you're connected. No computer, no scripts, no files to copy.
 
-```bash
-./scripts/send-credentials.sh pi@raspberrypi.local
-```
+That's it — the meters go live immediately. The tracker refreshes its token
+automatically from then on, so this is a one-time step. If the sign-in ever
+expires, the dashboard shows the button again.
 
-That's it. Within a minute or two the meters go live. The tracker refreshes
-its token automatically from then on, so this is normally a one-time step.
-(If you ever log out of Claude Code or the sign-in expires, the dashboard
-tells you and you just re-run the script.)
-
-> Already run Claude Code on the Pi itself? Then skip step 2 — the tracker
-> finds `~/.claude/.credentials.json` automatically.
+> **Prefer to reuse an existing Claude Code login?** Two shortcuts:
+> - Already run Claude Code *on the Pi itself*? The tracker auto-detects
+>   `~/.claude/.credentials.json` — nothing to do.
+> - On a Mac/Linux box with Claude Code logged in? You can copy its
+>   credentials over instead: `./scripts/send-credentials.sh pi@raspberrypi.local`
 
 ## Try it without a Pi
 
