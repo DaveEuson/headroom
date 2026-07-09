@@ -95,16 +95,24 @@ def exchange_code(pasted, verifier):
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
-            detail = exc.read().decode("utf-8", "replace").strip()[:200]
+            detail = exc.read().decode("utf-8", "replace").strip()[:500]
         except Exception:
             pass
-        print(f"oauth token exchange failed: HTTP {exc.code} {detail}",
-              file=sys.stderr)
+        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        print(f"oauth token exchange failed: HTTP {exc.code} "
+              f"retry-after={retry_after} {detail}", file=sys.stderr)
         if exc.code == 429:
+            wait = "a while"
+            if retry_after:
+                try:
+                    mins = max(1, round(int(retry_after) / 60))
+                    wait = f"about {mins} minute(s)"
+                except ValueError:
+                    wait = f"until {retry_after}"
             raise LoginError(
-                "Anthropic is temporarily rate-limiting sign-in because of the "
-                "recent attempts. Wait about 10 minutes, then tap 'Start over "
-                "with a fresh code' and try just once."
+                f"Anthropic is rate-limiting sign-in from this Pi after the "
+                f"recent attempts — wait {wait}, then tap 'Start over with a "
+                f"fresh code' and try just once."
             )
         if exc.code in (400, 401, 403):
             msg = ("That code didn't work. Sign-in codes are single-use and "
