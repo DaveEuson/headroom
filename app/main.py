@@ -196,13 +196,15 @@ def _creds_write_path(config):
     return os.path.expanduser("~/.claude-tracker/credentials.json")
 
 
-def complete_login(state, code):
+def complete_login(state, code, verifier=None):
     """Exchange a pasted code, save credentials, and refresh usage now.
 
     Returns the plan name on success. Raises oauth_login.LoginError on
-    anything the user can fix (bad/expired code, expired session).
+    anything the user can fix (bad/expired code, expired session). The
+    verifier is sent back by the page (robust to mobile tab reloads); we
+    fall back to the server-held one for older page loads.
     """
-    verifier = state.pending_verifier
+    verifier = verifier or state.pending_verifier
     if not verifier:
         raise oauth_login.LoginError(
             "This sign-in link expired. Reload the page and try again."
@@ -272,7 +274,7 @@ CONNECT_PAGE = """<!DOCTYPE html>
 
   <div class="card">
     <div class="step">Step 1</div>
-    <a class="btn" href="__AUTH_URL__" target="_blank" rel="noopener">
+    <a class="btn" id="signin" href="__AUTH_URL__" target="_blank" rel="noopener">
       Sign in with Claude</a>
     <p class="muted" style="margin:12px 0 0">Opens claude.ai. After you approve,
        Claude shows you a code — copy the whole thing.</p>
@@ -285,24 +287,41 @@ CONNECT_PAGE = """<!DOCTYPE html>
              autocomplete="off" autocapitalize="off" spellcheck="false">
       <button class="btn" type="submit" id="go">Finish setup</button>
     </form>
+    <input type="hidden" id="verifier" value="__VERIFIER__">
+    <p class="muted" style="margin:12px 0 0">Codes expire quickly — if it
+       fails, just tap Sign in again for a fresh one.</p>
     <div id="msg"></div>
   </div>
 
   <p class="muted" style="margin-top:18px">
-    <a class="back" href="/">&larr; Back to dashboard</a></p>
+    <a class="back" href="#" onclick="return startOver()">Start over with a fresh code</a>
+    &nbsp;·&nbsp; <a class="back" href="/">Back to dashboard</a></p>
 </div>
 <script>
+// Keep the sign-in link + PKCE verifier stable across mobile tab reloads:
+// if we've already started a flow, reuse it instead of the fresh one the
+// server just injected (so the code you got still matches).
+(function(){
+  var link=document.getElementById('signin'), ver=document.getElementById('verifier');
+  var saved=null; try{ saved=JSON.parse(localStorage.getItem('ctp_oauth')||'null'); }catch(e){}
+  if(saved&&saved.url&&saved.ver){ link.href=saved.url; ver.value=saved.ver; }
+  else{ localStorage.setItem('ctp_oauth', JSON.stringify({url:link.href, ver:ver.value})); }
+})();
+function startOver(){ try{localStorage.removeItem('ctp_oauth');}catch(e){} location.reload(); return false; }
 async function finish(e){
   e.preventDefault();
   var msg=document.getElementById('msg'), go=document.getElementById('go');
   var code=document.getElementById('code').value.trim();
+  var verifier=document.getElementById('verifier').value;
   if(!code){ msg.innerHTML='<span class="err">Paste the code first.</span>'; return false; }
   go.disabled=true; msg.textContent='Connecting…';
   try{
     var r=await fetch('/api/connect',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code})});
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({code:code,verifier:verifier})});
     var d=await r.json();
     if(d.ok){
+      try{localStorage.removeItem('ctp_oauth');}catch(e){}
       msg.innerHTML='<span class="ok">You\\'re connected!'+
         (d.plan?(' ('+d.plan+' plan)'):'')+'</span> Redirecting…';
       setTimeout(function(){location.href='/';},1500);
@@ -348,7 +367,9 @@ def make_handler(state, demo):
             url, verifier = oauth_login.start_login()
             with state.lock:
                 state.pending_verifier = verifier
-            body = CONNECT_PAGE.replace("__AUTH_URL__", html.escape(url, quote=True))
+            body = CONNECT_PAGE.replace(
+                "__AUTH_URL__", html.escape(url, quote=True)
+            ).replace("__VERIFIER__", html.escape(verifier, quote=True))
             body = body.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -369,7 +390,8 @@ def make_handler(state, demo):
                                  "error": "Sign-in is disabled in demo mode."})
                 return
             try:
-                plan = complete_login(state, data.get("code", ""))
+                plan = complete_login(state, data.get("code", ""),
+                                      data.get("verifier"))
                 self._send_json({"ok": True, "plan": plan})
             except oauth_login.LoginError as exc:
                 self._send_json({"ok": False, "error": str(exc)})

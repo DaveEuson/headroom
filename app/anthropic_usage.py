@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -90,12 +91,17 @@ def _save(path, data):
         raise
 
 
-def _post_json(url, payload):
-    body = json.dumps(payload).encode("utf-8")
+def _post_form(url, payload):
+    # RFC 6749 token requests are form-encoded (matches Claude Code).
+    body = urllib.parse.urlencode(payload).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
@@ -110,7 +116,7 @@ def _refresh(path, data, oauth):
             "Copy fresh credentials to the Pi (see README)."
         )
     try:
-        result = _post_json(
+        result = _post_form(
             TOKEN_URL,
             {
                 "grant_type": "refresh_token",

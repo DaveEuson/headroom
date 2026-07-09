@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import secrets
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -69,23 +70,35 @@ def exchange_code(pasted, verifier):
         "code_verifier": verifier,
         "redirect_uri": REDIRECT_URI,
     }
-    body = json.dumps(payload).encode("utf-8")
+    # RFC 6749 token requests are form-encoded (this is what Claude Code sends).
+    body = urllib.parse.urlencode(payload).encode("utf-8")
     req = urllib.request.Request(
         TOKEN_URL,
         data=body,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        },
         method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "replace").strip()[:200]
+        except Exception:
+            pass
+        print(f"oauth token exchange failed: HTTP {exc.code} {detail}",
+              file=sys.stderr)
         if exc.code in (400, 401, 403):
-            raise LoginError(
-                "That code didn't work. It may have expired or been mistyped "
-                "— start again and paste the whole code, including the part "
-                "after the # sign."
-            )
+            msg = ("That code didn't work. Sign-in codes are single-use and "
+                   "expire fast — tap 'Sign in with Claude' again for a fresh "
+                   "one, approve, and paste it right away.")
+            if detail:
+                msg += f"  (Anthropic said: {detail})"
+            raise LoginError(msg)
         raise LoginError(f"Sign-in failed: HTTP {exc.code}")
     except (urllib.error.URLError, OSError) as exc:
         raise LoginError(f"Couldn't reach Anthropic to finish sign-in: {exc}")
