@@ -100,6 +100,12 @@ def exchange_code(pasted, verifier):
             pass
         print(f"oauth token exchange failed: HTTP {exc.code} {detail}",
               file=sys.stderr)
+        if exc.code == 429:
+            raise LoginError(
+                "Anthropic is temporarily rate-limiting sign-in because of the "
+                "recent attempts. Wait about 10 minutes, then tap 'Start over "
+                "with a fresh code' and try just once."
+            )
         if exc.code in (400, 401, 403):
             msg = ("That code didn't work. Sign-in codes are single-use and "
                    "expire fast — tap 'Sign in with Claude' again for a fresh "
