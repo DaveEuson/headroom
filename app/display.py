@@ -203,6 +203,17 @@ def _is_night(snapshot):
         else (start <= mins < end)
 
 
+def _theme_for(snapshot, night):
+    """Colors follow the 'theme' setting; 'auto' tracks the day/night schedule.
+    (This is separate from `night`, which decides whether the mascot sleeps.)"""
+    pref = (snapshot.get("theme") or "auto").lower()
+    if pref == "dark":
+        return THEMES["night"]
+    if pref == "light":
+        return THEMES["day"]
+    return THEMES["night" if night else "day"]
+
+
 def _mood(snapshot, night):
     windows = snapshot.get("windows") or []
     if night:
@@ -470,7 +481,10 @@ def _render_setup(theme, fonts, url):
 
 def _draw_header(draw, snapshot, theme, fonts):
     """Clock (left) + battery (right). Wi-Fi lives in the footer now."""
-    clock = time.strftime("%I:%M %p").lstrip("0")
+    if snapshot.get("clock_24h"):
+        clock = time.strftime("%H:%M")
+    else:
+        clock = time.strftime("%I:%M %p").lstrip("0")
     draw.text((10, 6), clock, font=fonts["clock"], fill=theme["ink"])
     battery = snapshot.get("battery")
     if battery:
@@ -546,8 +560,8 @@ def _render_maxed(theme, fonts, snapshot, frame, sprites):
 def render(snapshot, frame, fonts, sprites=None, setup_url=None):
     from PIL import Image, ImageDraw
 
-    night = _is_night(snapshot)
-    theme = THEMES["night" if night else "day"]
+    night = _is_night(snapshot)          # drives the mascot sleeping
+    theme = _theme_for(snapshot, night)  # colors: honors the theme setting
     wifi = _wifi_setup_state()
     if wifi:
         return _render_wifi_setup(theme, fonts, wifi)

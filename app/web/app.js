@@ -4,6 +4,8 @@ const POLL_MS = 30000;
 
 let latest = null; // last /api/status payload
 let night = { start: "22:00", end: "07:00" }; // overwritten from server config
+let themePref = "auto"; // "auto" | "light" | "dark" — from settings
+let clock24h = false;   // 24-hour time — from settings
 
 // ?night=1 / ?night=0 forces night/day, ?active=1 / ?active=0 forces the
 // session-detected state (both handy for testing)
@@ -26,6 +28,15 @@ function isNight() {
   if (start === end) return false;
   return start < end ? mins >= start && mins < end
                      : mins >= start || mins < end; // window crosses midnight
+}
+
+// Colors: the theme setting can force light/dark; "auto" tracks the schedule.
+// (Separate from isNight(), which still decides whether Pip sleeps.)
+function colorIsNight() {
+  if (FORCE_NIGHT !== null) return FORCE_NIGHT === "1";
+  if (themePref === "dark") return true;
+  if (themePref === "light") return false;
+  return isNight();
 }
 
 const el = (id) => document.getElementById(id);
@@ -52,7 +63,8 @@ function fmtCountdown(ms) {
 }
 
 function fmtClock(date) {
-  const opts = { hour: "numeric", minute: "2-digit" };
+  const opts = { hour: clock24h ? "2-digit" : "numeric", minute: "2-digit",
+                 hour12: !clock24h };
   const days = (date - new Date()) / 86400000;
   if (days > 22) return "";
   if (days > 0.9 || date.getDate() !== new Date().getDate()) {
@@ -166,11 +178,11 @@ function renderMood(windows) {
 
 function renderClock() {
   const now = new Date();
-  el("clock-time").textContent =
-    now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  el("clock-time").textContent = now.toLocaleTimeString([],
+    { hour: clock24h ? "2-digit" : "numeric", minute: "2-digit", hour12: !clock24h });
   el("clock-date").textContent =
     now.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
-  document.body.classList.toggle("night", isNight());
+  document.body.classList.toggle("night", colorIsNight());
 }
 
 function renderUpdated() {
@@ -214,6 +226,8 @@ function render(data) {
   if (data.plan) plan.textContent = "Claude " + data.plan;
 
   if (data.night) night = data.night;
+  if (data.theme) themePref = data.theme;
+  clock24h = !!data.clock_24h;
 
   const wifiLink = el("wifi-link");
   if (wifiLink) {

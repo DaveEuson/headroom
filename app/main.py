@@ -40,6 +40,8 @@ DEFAULT_CONFIG = {
     # Anthropic path (no longer works -- Anthropic blocks third-party OAuth).
     "data_source": "push",
     "push_token": "",         # optional shared secret the companion must send
+    "theme": "auto",          # "auto" (day/night by schedule), "light", "dark"
+    "clock_24h": False,       # 24-hour time instead of AM/PM
 }
 
 # How long after the last observed usage increase we still call the
@@ -56,10 +58,14 @@ CONTENT_TYPES = {
 }
 
 
-def load_config():
-    path = os.environ.get(
+def config_path():
+    return os.environ.get(
         "CLAUDE_TRACKER_CONFIG", os.path.join(ROOT, "config.json")
     )
+
+
+def load_config():
+    path = config_path()
     config = dict(DEFAULT_CONFIG)
     if os.path.isfile(path):
         try:
@@ -68,6 +74,40 @@ def load_config():
         except (OSError, ValueError) as exc:
             print(f"Warning: ignoring bad config {path}: {exc}", file=sys.stderr)
     return config
+
+
+def save_config(config):
+    """Persist the full effective config so settings survive a restart."""
+    path = config_path()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(config, fh, indent=2)
+    os.replace(tmp, path)
+
+
+# Settings the /settings page may change, each with a validator/normalizer.
+SETTINGS_FIELDS = {
+    "theme": lambda v: v if v in ("auto", "light", "dark") else None,
+    "clock_24h": lambda v: bool(v),
+}
+
+
+def apply_settings(state, payload):
+    """Validate + persist settings from the web form. Returns the applied dict."""
+    if not isinstance(payload, dict):
+        raise ValueError("expected a JSON object")
+    applied = {}
+    for key, normalize in SETTINGS_FIELDS.items():
+        if key not in payload:
+            continue
+        value = normalize(payload[key])
+        if value is None:
+            raise ValueError(f"invalid value for {key!r}")
+        applied[key] = value
+    with state.lock:
+        state.config.update(applied)   # same dict the display + snapshot read
+    save_config(state.config)
+    return applied
 
 
 class State:
@@ -103,6 +143,8 @@ class State:
                     "start": self.config.get("night_start", "22:00"),
                     "end": self.config.get("night_end", "07:00"),
                 },
+                "theme": self.config.get("theme", "auto"),
+                "clock_24h": bool(self.config.get("clock_24h", False)),
                 "server_time": time.time(),
             }
 
@@ -134,6 +176,8 @@ def demo_snapshot():
         "wifi": {"ssid": "HomeWiFi"},
         "session_active": True,
         "night": {"start": "22:00", "end": "07:00"},
+        "theme": "auto",
+        "clock_24h": False,
         "server_time": t,
     }
 
@@ -403,6 +447,107 @@ load();
 </body></html>"""
 
 
+SETTINGS_PAGE = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings</title>
+<style>
+  :root { color-scheme: light dark; --accent:#d97757; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px 18px 40px; font-family:system-ui,-apple-system,
+    "Segoe UI",sans-serif; background:#f0eee6; color:#3d3929; line-height:1.5; }
+  @media (prefers-color-scheme: dark) {
+    body { background:#262624; color:#f5f4ef; }
+    .card { background:#30302e !important; border-color:rgba(245,244,239,.1) !important; }
+    .muted { color:#94907e !important; }
+    select { background:#1a1a19 !important; color:#f5f4ef !important;
+      border-color:rgba(245,244,239,.2) !important; }
+    .row { border-color:rgba(245,244,239,.08) !important; }
+  }
+  .wrap { max-width:460px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  .muted { color:#8a8478; font-size:.9rem; }
+  .card { background:#faf9f5; border:1px solid rgba(61,57,41,.12);
+    border-radius:14px; padding:4px 16px; margin-top:16px; }
+  .row { display:flex; align-items:center; gap:12px; padding:14px 0;
+    border-bottom:1px solid rgba(61,57,41,.08); }
+  .row:last-child { border-bottom:none; }
+  .row .lab { flex:1; }
+  .row .lab small { display:block; color:#8a8478; font-size:.82rem; }
+  select { font-size:1rem; padding:8px 10px; border-radius:9px;
+    border:1px solid rgba(61,57,41,.25); background:#fff; color:#3d3929; }
+  .sw { position:relative; width:46px; height:28px; flex:none; }
+  .sw input { opacity:0; width:0; height:0; }
+  .sw span { position:absolute; inset:0; background:#cfcabb; border-radius:999px;
+    transition:.2s; cursor:pointer; }
+  .sw span::before { content:""; position:absolute; height:22px; width:22px;
+    left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; }
+  .sw input:checked + span { background:var(--accent); }
+  .sw input:checked + span::before { transform:translateX(18px); }
+  .status { margin-top:14px; font-size:.9rem; min-height:1.2em; }
+  .ok { color:#0f7b3f; } .err { color:#c4453d; }
+  a.back { display:inline-block; margin-top:22px; color:var(--accent);
+    text-decoration:none; font-weight:600; }
+</style>
+</head><body>
+<div class="wrap">
+  <h1>Settings</h1>
+  <p class="muted">Changes save instantly and apply to the screen and this
+    dashboard.</p>
+
+  <div class="card">
+    <div class="row">
+      <div class="lab">Appearance<small>Cream by day, dark at night — or force one</small></div>
+      <select id="theme">
+        <option value="auto">Auto (day / night)</option>
+        <option value="light">Always light</option>
+        <option value="dark">Always dark</option>
+      </select>
+    </div>
+    <div class="row">
+      <div class="lab">24-hour clock<small>Show 18:30 instead of 6:30 PM</small></div>
+      <label class="sw"><input type="checkbox" id="clock_24h"><span></span></label>
+    </div>
+  </div>
+
+  <div class="status" id="status"></div>
+  <a class="back" href="/">← Back to the dashboard</a>
+</div>
+
+<script>
+  var status = document.getElementById("status");
+  function flash(msg, ok) {
+    status.className = "status " + (ok ? "ok" : "err");
+    status.textContent = msg;
+    if (ok) setTimeout(function(){ status.textContent = ""; }, 1500);
+  }
+  async function load() {
+    try {
+      var s = await (await fetch("/api/settings")).json();
+      document.getElementById("theme").value = s.theme || "auto";
+      document.getElementById("clock_24h").checked = !!s.clock_24h;
+    } catch (e) { flash("Couldn't load settings.", false); }
+  }
+  async function save(patch) {
+    try {
+      var r = await fetch("/api/settings", { method:"POST",
+        headers:{"Content-Type":"application/json"}, body:JSON.stringify(patch) });
+      var d = await r.json();
+      if (d.ok) flash("Saved.", true); else flash(d.error || "Couldn't save.", false);
+    } catch (e) { flash("Couldn't reach the tracker.", false); }
+  }
+  document.getElementById("theme").addEventListener("change", function(e){
+    save({ theme: e.target.value });
+  });
+  document.getElementById("clock_24h").addEventListener("change", function(e){
+    save({ clock_24h: e.target.checked });
+  });
+  load();
+</script>
+</body></html>"""
+
+
 def make_handler(state, demo):
     class Handler(BaseHTTPRequestHandler):
         server_version = "ClaudeTrackerPi/1.0"
@@ -418,6 +563,13 @@ def make_handler(state, demo):
                 return
             if path == "/wifi":
                 self._send_html(WIFI_PAGE)
+                return
+            if path == "/settings":
+                self._send_html(SETTINGS_PAGE)
+                return
+            if path == "/api/settings":
+                self._send_json({k: state.config.get(k)
+                                 for k in SETTINGS_FIELDS})
                 return
             if path == "/api/wifi/networks":
                 if demo:
@@ -448,6 +600,16 @@ def make_handler(state, demo):
             path = self.path.split("?", 1)[0]
             if path == "/api/push":
                 self._handle_push()
+                return
+            if path == "/api/settings":
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                raw = self.rfile.read(length) if length else b"{}"
+                try:
+                    payload = json.loads(raw.decode("utf-8") or "{}")
+                    applied = apply_settings(state, payload)
+                    self._send_json({"ok": True, "applied": applied})
+                except ValueError as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, code=400)
                 return
             if path == "/api/wifi/join":
                 length = int(self.headers.get("Content-Length", 0) or 0)
