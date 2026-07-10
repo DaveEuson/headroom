@@ -77,6 +77,17 @@ power-on to live meters is about five minutes:
 
 ## Build it yourself (two steps)
 
+### What you'll need
+
+| Part | Notes |
+|------|-------|
+| [Raspberry Pi Zero 2 W](https://www.amazon.com/dp/B0FX3SCP5F?tag=daveeuson01-20) | The brain of the tracker. |
+| [Solderless GPIO hammer header](https://www.amazon.com/dp/B0CGRYYY63?tag=daveeuson01-20) **·** or a [soldering kit](https://www.amazon.com/dp/B087767KNW?tag=daveeuson01-20) | The Whisplay HAT needs a 40‑pin header on the Pi. The press‑on "hammer" header adds it with no soldering; or solder your own. Skip if your Pi already has a header. |
+| [PiSugar Whisplay HAT](https://www.amazon.com/dp/B0FPG8S6K6?tag=daveeuson01-20) | The 1.69″ LCD board that sits on top. (Add a PiSugar battery separately if yours doesn't include one.) |
+| [microSD card](https://www.amazon.com/dp/B08L5HMJVW?tag=daveeuson01-20) | 16–32 GB is plenty. Flash it with Raspberry Pi OS Lite. |
+
+*As an Amazon Associate I earn from qualifying purchases.*
+
 ### 1. On the Pi
 
 ```bash
