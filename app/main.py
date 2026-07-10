@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import anthropic_usage
 import display
+import notify
 import pisugar
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -43,6 +44,11 @@ DEFAULT_CONFIG = {
     "theme": "auto",          # "auto" (day/night by schedule), "light", "dark"
     "clock_24h": False,       # 24-hour time instead of AM/PM
     "lcd_history": True,      # rotate a usage-history graph onto the LCD
+    "audio_alerts": False,    # beep on out-of-credits / restored (off default)
+    "push_service": "none",   # "none" | "ntfy" | "pushover"
+    "ntfy_topic": "",         # your ntfy.sh topic
+    "pushover_token": "",     # your own Pushover app token
+    "pushover_user": "",      # your Pushover user key
 }
 
 # How long after the last observed usage increase we still call the
@@ -142,6 +148,11 @@ SETTINGS_FIELDS = {
     "theme": lambda v: v if v in ("auto", "light", "dark") else None,
     "clock_24h": lambda v: bool(v),
     "lcd_history": lambda v: bool(v),
+    "audio_alerts": lambda v: bool(v),
+    "push_service": lambda v: v if v in ("none", "ntfy", "pushover") else None,
+    "ntfy_topic": lambda v: str(v)[:80],
+    "pushover_token": lambda v: str(v)[:64],
+    "pushover_user": lambda v: str(v)[:64],
 }
 
 
@@ -178,6 +189,7 @@ class State:
         self.last_activity = 0.0      # when utilization last went up
         self.wifi = {"ssid": None, "ip": None}  # current network
         self.history = load_history()  # {key: [[epoch, utilization], ...]}
+        self.session_maxed = None      # last known "out of session usage" state
 
     def snapshot(self):
         with self.lock:
@@ -385,7 +397,18 @@ def apply_push(state, config, payload):
         state.usage_updated = time.time()
         record_history(state, clean, time.time())
         history_copy = {k: list(v) for k, v in state.history.items()}
+        # out-of-credits / restored transition (5-hour session window)
+        session = next((w["utilization"] for w in clean
+                        if w["key"] == "five_hour"), None)
+        transition = None
+        if session is not None:
+            maxed = session >= 99.5
+            if state.session_maxed is not None and maxed != state.session_maxed:
+                transition = "out" if maxed else "restored"
+            state.session_maxed = maxed
     save_history(history_copy)   # persist outside the lock (file I/O)
+    if transition:
+        notify.alert(state.config, transition)
 
 
 WIFI_API = "http://127.0.0.1:8079"   # wifi_setup.py's localhost control API
@@ -551,8 +574,17 @@ SETTINGS_PAGE = """<!DOCTYPE html>
   .row:last-child { border-bottom:none; }
   .row .lab { flex:1; }
   .row .lab small { display:block; color:#8a8478; font-size:.82rem; }
-  select { font-size:1rem; padding:8px 10px; border-radius:9px;
+  select, input[type=text] { font-size:1rem; padding:8px 10px; border-radius:9px;
     border:1px solid rgba(61,57,41,.25); background:#fff; color:#3d3929; }
+  input[type=text] { width:100%; margin-top:6px; }
+  @media (prefers-color-scheme: dark) {
+    input[type=text] { background:#1a1a19 !important; color:#f5f4ef !important;
+      border-color:rgba(245,244,239,.2) !important; }
+  }
+  .sub { display:none; padding:2px 0 12px; }
+  .sub.on { display:block; }
+  .sub label { display:block; font-size:.82rem; color:#8a8478; margin-top:8px; }
+  h2 { font-size:1rem; margin:14px 2px 2px; color:#8a8478; font-weight:600; }
   .sw { position:relative; width:46px; height:28px; flex:none; }
   .sw input { opacity:0; width:0; height:0; }
   .sw span { position:absolute; inset:0; background:#cfcabb; border-radius:999px;
@@ -591,6 +623,32 @@ SETTINGS_PAGE = """<!DOCTYPE html>
     </div>
   </div>
 
+  <h2>Alerts</h2>
+  <div class="card">
+    <div class="row">
+      <div class="lab">Audio alert<small>Beep from the speaker when you run out / recover</small></div>
+      <label class="sw"><input type="checkbox" id="audio_alerts"><span></span></label>
+    </div>
+    <div class="row">
+      <div class="lab">Phone notifications<small>Ping your phone when you run out / recover</small></div>
+      <select id="push_service">
+        <option value="none">Off</option>
+        <option value="ntfy">ntfy (free, no account)</option>
+        <option value="pushover">Pushover (your own keys)</option>
+      </select>
+    </div>
+    <div class="sub" id="sub-ntfy">
+      <label>ntfy topic — pick a hard-to-guess name, then subscribe to it in the ntfy app</label>
+      <input type="text" id="ntfy_topic" placeholder="e.g. claude-dave-7fq2" autocomplete="off">
+    </div>
+    <div class="sub" id="sub-pushover">
+      <label>Pushover application token (register an app at pushover.net)</label>
+      <input type="text" id="pushover_token" placeholder="a1b2c3…" autocomplete="off">
+      <label>Pushover user key</label>
+      <input type="text" id="pushover_user" placeholder="u1v2w3…" autocomplete="off">
+    </div>
+  </div>
+
   <div class="status" id="status"></div>
   <a class="back" href="/">← Back to the dashboard</a>
 </div>
@@ -602,12 +660,23 @@ SETTINGS_PAGE = """<!DOCTYPE html>
     status.textContent = msg;
     if (ok) setTimeout(function(){ status.textContent = ""; }, 1500);
   }
+  function syncSubs() {
+    var svc = document.getElementById("push_service").value;
+    document.getElementById("sub-ntfy").classList.toggle("on", svc === "ntfy");
+    document.getElementById("sub-pushover").classList.toggle("on", svc === "pushover");
+  }
   async function load() {
     try {
       var s = await (await fetch("/api/settings")).json();
       document.getElementById("theme").value = s.theme || "auto";
       document.getElementById("clock_24h").checked = !!s.clock_24h;
       document.getElementById("lcd_history").checked = !!s.lcd_history;
+      document.getElementById("audio_alerts").checked = !!s.audio_alerts;
+      document.getElementById("push_service").value = s.push_service || "none";
+      document.getElementById("ntfy_topic").value = s.ntfy_topic || "";
+      document.getElementById("pushover_token").value = s.pushover_token || "";
+      document.getElementById("pushover_user").value = s.pushover_user || "";
+      syncSubs();
     } catch (e) { flash("Couldn't load settings.", false); }
   }
   async function save(patch) {
@@ -626,6 +695,17 @@ SETTINGS_PAGE = """<!DOCTYPE html>
   });
   document.getElementById("lcd_history").addEventListener("change", function(e){
     save({ lcd_history: e.target.checked });
+  });
+  document.getElementById("audio_alerts").addEventListener("change", function(e){
+    save({ audio_alerts: e.target.checked });
+  });
+  document.getElementById("push_service").addEventListener("change", function(e){
+    syncSubs(); save({ push_service: e.target.value });
+  });
+  ["ntfy_topic","pushover_token","pushover_user"].forEach(function(id){
+    document.getElementById(id).addEventListener("change", function(e){
+      var p = {}; p[id] = e.target.value.trim(); save(p);
+    });
   });
   load();
 </script>
