@@ -54,7 +54,7 @@ if command -v nmcli >/dev/null; then
   echo "Installing Wi-Fi setup service '$SERVICE-wifi'..."
   sudo tee /etc/systemd/system/$SERVICE-wifi.service >/dev/null <<UNIT
 [Unit]
-Description=ClaudeTrackerPi - first-boot Wi-Fi provisioning hotspot
+Description=ClaudeTrackerPi - Wi-Fi manager (setup hotspot + dashboard API)
 After=NetworkManager.service
 Wants=NetworkManager.service
 
@@ -62,7 +62,7 @@ Wants=NetworkManager.service
 Type=simple
 User=root
 ExecStart=/usr/bin/python3 $DIR/app/wifi_setup.py
-Restart=on-failure
+Restart=always
 RestartSec=15
 
 [Install]

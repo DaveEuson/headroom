@@ -15,6 +15,8 @@ import os
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -339,6 +341,141 @@ async function finish(e){
 </body></html>"""
 
 
+WIFI_API = "http://127.0.0.1:8079"   # wifi_setup.py's localhost control API
+
+DEMO_NETWORKS = {
+    "current": "HomeWiFi",
+    "networks": [
+        {"ssid": "HomeWiFi", "signal": 92, "secured": True},
+        {"ssid": "Neighbor5G", "signal": 58, "secured": True},
+        {"ssid": "CoffeeShop", "signal": 34, "secured": False},
+    ],
+}
+
+
+def _wifi_api(path, payload=None):
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"Content-Type": "application/json"} if data else {}
+    req = urllib.request.Request(WIFI_API + path, data=data, headers=headers)
+    with urllib.request.urlopen(req, timeout=45) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+WIFI_PAGE = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wi-Fi settings</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px 18px 40px; font-family:system-ui,-apple-system,
+    "Segoe UI",sans-serif; background:#f0eee6; color:#3d3929; line-height:1.5; }
+  @media (prefers-color-scheme: dark) {
+    body { background:#262624; color:#f5f4ef; }
+    .card { background:#30302e !important; border-color:rgba(245,244,239,.1) !important; }
+    input { background:#1a1a19 !important; color:#f5f4ef !important;
+      border-color:rgba(245,244,239,.2) !important; }
+    .muted { color:#94907e !important; }
+    label.net { border-color:rgba(245,244,239,.08) !important; }
+  }
+  .wrap { max-width:460px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  .muted { color:#8a8478; font-size:.9rem; }
+  .card { background:#faf9f5; border:1px solid rgba(61,57,41,.12);
+    border-radius:14px; padding:16px; margin-top:16px; }
+  label.net { display:flex; align-items:center; gap:10px; padding:10px 6px;
+    border-bottom:1px solid rgba(61,57,41,.08); font-size:1rem; }
+  label.net:last-of-type { border-bottom:none; }
+  .sig { margin-left:auto; color:#8a8478; font-size:.8rem; }
+  .cur { color:#0f7b3f; font-size:.8rem; font-weight:600; }
+  input[type=text],input[type=password] { width:100%; padding:12px; font-size:1rem;
+    border-radius:10px; border:1px solid rgba(61,57,41,.25); background:#fff;
+    margin:6px 0 12px; }
+  .btn { display:block; width:100%; text-align:center; background:#d97757;
+    color:#fff; font-weight:600; font-size:1.05rem; padding:14px;
+    border-radius:10px; border:none; cursor:pointer; }
+  .btn[disabled] { opacity:.6; }
+  #msg { margin-top:14px; font-size:.95rem; }
+  .ok { color:#0f7b3f; font-weight:600; }
+  .err { color:#c4453d; font-weight:600; }
+  a.back { color:#c15f3c; }
+</style></head>
+<body><div class="wrap">
+  <h1>Wi-Fi settings</h1>
+  <p class="muted" id="cur">Checking current network…</p>
+  <div class="card">
+    <div id="nets"><p class="muted">Scanning for networks…</p></div>
+    <div style="margin-top:12px">
+      <input type="text" id="ssid_other" placeholder="Or type a network name">
+      <input type="password" id="password" placeholder="Wi-Fi password">
+      <button class="btn" id="go" onclick="join()">Connect</button>
+    </div>
+    <div id="msg"></div>
+  </div>
+  <p class="muted" style="margin-top:14px">Switching drops the tracker off
+    the network for ~30 seconds. If it can't join the new network, it comes
+    back on the old one (or starts its <b>ClaudeTracker-Setup</b> hotspot).</p>
+  <p class="muted"><a class="back" href="/">&larr; Back to dashboard</a></p>
+</div>
+<script>
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+async function load(){
+  try{
+    var r=await fetch('/api/wifi/networks'); var d=await r.json();
+    if(d.error){ document.getElementById('nets').innerHTML=
+      '<p class="err">'+esc(d.error)+'</p>'; return; }
+    document.getElementById('cur').textContent =
+      d.current ? ('Connected to: '+d.current) : 'Not connected to Wi-Fi.';
+    var rows = d.networks.map(function(n){
+      var cur = (n.ssid===d.current) ? ' <span class="cur">current</span>' : '';
+      return '<label class="net"><input type="radio" name="ssid" value="'+
+        esc(n.ssid)+'">'+(n.secured?'&#128274; ':'')+esc(n.ssid)+cur+
+        '<span class="sig">'+n.signal+'%</span></label>';
+    }).join('');
+    document.getElementById('nets').innerHTML =
+      rows || '<p class="muted">No networks found.</p>';
+  }catch(e){
+    document.getElementById('nets').innerHTML =
+      '<p class="err">Wi-Fi service unavailable on this device.</p>';
+  }
+}
+async function join(){
+  var msg=document.getElementById('msg'), go=document.getElementById('go');
+  var sel=document.querySelector('input[name=ssid]:checked');
+  var ssid=(document.getElementById('ssid_other').value.trim())||(sel&&sel.value)||'';
+  if(!ssid){ msg.innerHTML='<span class="err">Pick or type a network first.</span>'; return; }
+  go.disabled=true;
+  msg.innerHTML='Switching to <b>'+esc(ssid)+'</b>… the tracker may go quiet for ~30s.';
+  try{
+    var r=await fetch('/api/wifi/join',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ssid:ssid,password:document.getElementById('password').value})});
+    var d=await r.json();
+    if(!d.ok){ go.disabled=false;
+      msg.innerHTML='<span class="err">'+esc(d.error||'Failed.')+'</span>'; return; }
+  }catch(e){ /* expected if the network drops mid-switch */ }
+  var tries=0;
+  var poll=setInterval(async function(){
+    tries++;
+    try{
+      var r=await fetch('/api/wifi/status'); var s=await r.json();
+      if(s.error && s.phase!=='joining'){ clearInterval(poll); go.disabled=false;
+        msg.innerHTML='<span class="err">'+esc(s.error)+'</span>'; load(); return; }
+      if(s.phase==='connected' && s.current){ clearInterval(poll);
+        msg.innerHTML='<span class="ok">Connected to '+esc(s.current)+'.</span>';
+        go.disabled=false; load(); return; }
+    }catch(e){ /* device switching networks */ }
+    if(tries>30){ clearInterval(poll); go.disabled=false;
+      msg.innerHTML='If this page stopped updating, the tracker moved '+
+        'networks — reopen the dashboard from its screen QR.'; }
+  }, 3000);
+}
+load();
+</script>
+</body></html>"""
+
+
 def make_handler(state, demo):
     class Handler(BaseHTTPRequestHandler):
         server_version = "ClaudeTrackerPi/1.0"
@@ -352,6 +489,30 @@ def make_handler(state, demo):
             if path == "/connect":
                 self._send_connect_page()
                 return
+            if path == "/wifi":
+                self._send_html(WIFI_PAGE)
+                return
+            if path == "/api/wifi/networks":
+                if demo:
+                    self._send_json(DEMO_NETWORKS)
+                    return
+                try:
+                    self._send_json(_wifi_api("/networks"))
+                except (urllib.error.URLError, OSError, ValueError):
+                    self._send_json({"error": "Wi-Fi service isn't running "
+                                     "on this device."})
+                return
+            if path == "/api/wifi/status":
+                if demo:
+                    self._send_json({"phase": "connected",
+                                     "current": "HomeWiFi"})
+                    return
+                try:
+                    self._send_json(_wifi_api("/status"))
+                except (urllib.error.URLError, OSError, ValueError):
+                    self._send_json({"error": "Wi-Fi service isn't running "
+                                     "on this device."})
+                return
             if path == "/":
                 path = "/index.html"
             self._send_file(path.lstrip("/"))
@@ -361,7 +522,30 @@ def make_handler(state, demo):
             if path == "/api/connect":
                 self._handle_connect()
                 return
+            if path == "/api/wifi/join":
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                raw = self.rfile.read(length) if length else b"{}"
+                if demo:
+                    self._send_json({"ok": False,
+                                     "error": "Disabled in demo mode."})
+                    return
+                try:
+                    payload = json.loads(raw.decode("utf-8") or "{}")
+                    self._send_json(_wifi_api("/join", payload))
+                except (urllib.error.URLError, OSError, ValueError):
+                    self._send_json({"ok": False, "error": "Wi-Fi service "
+                                     "isn't running on this device."})
+                return
             self.send_error(404)
+
+        def _send_html(self, text):
+            body = text.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def _send_connect_page(self):
             url, verifier = oauth_login.start_login()

@@ -1,18 +1,21 @@
-"""First-boot Wi-Fi provisioning: become a hotspot until we're online.
+"""Wi-Fi manager for ClaudeTrackerPi (runs as root, needs NetworkManager).
 
-If the Pi boots and can't join any known network within a grace period,
-this service (run as root by claude-tracker-wifi.service):
+Two jobs:
 
-  1. scans for nearby networks (while the radio is still free),
-  2. starts a WPA2 hotspot "ClaudeTracker-Setup" via NetworkManager,
-  3. serves a tiny captive portal on http://10.42.0.1 where the user picks
-     their home network and enters its password,
-  4. joins that network; on success the hotspot is removed and we exit.
-     On a wrong password the hotspot comes back with an error shown.
+1. **Setup hotspot.** On boot with no network (or if the network drops for
+   a while), scan nearby networks, start a WPA2 hotspot
+   "ClaudeTracker-Setup", and serve a captive portal on http://10.42.0.1
+   where the user picks their home network. While in hotspot mode we
+   periodically drop the hotspot to see if a known network came back.
 
-State is written to /run/claude-tracker/wifi.json so the HAT display can
-show "join my setup Wi-Fi" with a QR code. Standard library + nmcli only
-(NetworkManager is the default on Raspberry Pi OS Bookworm and later).
+2. **Control API** on 127.0.0.1:8079 (localhost only) so the dashboard can
+   list networks and switch Wi-Fi at any time, even while connected:
+       GET  /networks -> {"current": ssid|null, "networks": [...]}
+       GET  /status   -> {"phase": ..., "error": ..., "current": ...}
+       POST /join     {"ssid": ..., "password": ...} -> {"ok": true}
+
+State for the HAT display is written to /run/claude-tracker/wifi.json.
+Standard library + nmcli only.
 """
 
 import html
@@ -30,27 +33,34 @@ HOTSPOT_SSID = "ClaudeTracker-Setup"
 HOTSPOT_PSK = "claudepi"          # printed on the device screen
 HOTSPOT_CON = "ctp-hotspot"
 PORTAL_IP = "10.42.0.1"           # NetworkManager's shared-mode gateway
-GRACE_SECONDS = 45                # how long to wait for a known network
+CONTROL_PORT = 8079               # localhost API for the dashboard
+
+FIRST_BOOT_GRACE = 45             # no saved wifi at all -> hotspot quickly
+RECONNECT_GRACE = 300             # known wifi just down -> be patient first
+RECHECK_HOTSPOT = 120             # while hosting: retry known networks
 JOIN_TIMEOUT = 60
 
 STATE_DIR = "/run/claude-tracker"
 STATE_FILE = os.path.join(STATE_DIR, "wifi.json")
 
-# Captive-portal probe paths used by phones/laptops; answering with a
-# redirect makes the setup page pop up automatically after joining.
 PROBE_PATHS = {
     "/generate_204", "/gen_204", "/hotspot-detect.html", "/ncsi.txt",
     "/connecttest.txt", "/success.txt", "/canonical.html",
     "/library/test/success.html",
 }
 
-_scanned = []      # [(ssid, signal, secured)] cached from the boot scan
-_status = {"phase": "idle", "error": None, "target": None}
-_status_lock = threading.Lock()
+_scanned = []                     # [(ssid, signal, secured)]
+_status = {"phase": "starting", "error": None}
+_lock = threading.Lock()
 
 
 def log(msg):
     print(msg, file=sys.stderr, flush=True)
+
+
+def _set_status(**kw):
+    with _lock:
+        _status.update(kw)
 
 
 def nmcli(*args, timeout=30):
@@ -59,30 +69,53 @@ def nmcli(*args, timeout=30):
     )
 
 
+def hotspot_active():
+    return HOTSPOT_CON in nmcli(
+        "-t", "-f", "NAME", "connection", "show", "--active"
+    ).stdout
+
+
+def current_ssid():
+    """SSID we're connected to as a client, or None."""
+    if hotspot_active():
+        return None
+    r = nmcli("-t", "-f", "ACTIVE,SSID", "device", "wifi", "list")
+    for line in r.stdout.splitlines():
+        active, _, ssid = line.partition(":")
+        if active == "yes":
+            return ssid.replace("\\:", ":") or None
+    return None
+
+
 def wifi_connected():
-    """True if any wifi/ethernet device is connected to a network."""
+    if hotspot_active():
+        return False
     r = nmcli("-t", "-f", "DEVICE,TYPE,STATE", "device")
     for line in r.stdout.splitlines():
         parts = line.split(":")
         if len(parts) >= 3 and parts[1] in ("wifi", "ethernet") \
                 and parts[2].startswith("connected"):
-            # our own hotspot also counts as "connected"; exclude it
-            active = nmcli("-t", "-f", "NAME", "connection", "show",
-                           "--active").stdout
-            if HOTSPOT_CON in active:
-                return False
             return True
     return False
 
 
+def saved_wifi_profiles():
+    """Names of saved wifi connections (excluding our hotspot)."""
+    r = nmcli("-t", "-f", "NAME,TYPE", "connection", "show")
+    names = []
+    for line in r.stdout.splitlines():
+        name, _, ctype = line.rpartition(":")
+        if ctype == "802-11-wireless" and name != HOTSPOT_CON:
+            names.append(name)
+    return names
+
+
 def scan_networks():
-    """Scan while the radio is free; returns [(ssid, signal, secured)]."""
     nmcli("device", "wifi", "rescan", timeout=20)
     time.sleep(4)
     r = nmcli("-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list")
     best = {}
     for line in r.stdout.splitlines():
-        # SSIDs can contain escaped colons (\:)
         parts = re.split(r"(?<!\\):", line)
         if len(parts) < 3:
             continue
@@ -124,7 +157,7 @@ def clear_state():
 
 
 def start_hotspot():
-    nmcli("connection", "delete", HOTSPOT_CON)  # stale profile, if any
+    nmcli("connection", "delete", HOTSPOT_CON)
     r = nmcli("device", "wifi", "hotspot", "ifname", "wlan0",
               "con-name", HOTSPOT_CON, "ssid", HOTSPOT_SSID,
               "password", HOTSPOT_PSK, timeout=45)
@@ -135,36 +168,45 @@ def start_hotspot():
     return True
 
 
-def join_network(ssid, password):
-    """Try to join the user's network. Restores the hotspot on failure."""
-    with _status_lock:
-        _status.update(phase="joining", target=ssid, error=None)
-    write_state(joining=ssid)
+def stop_hotspot(delete=True):
     nmcli("connection", "down", HOTSPOT_CON)
+    if delete:
+        nmcli("connection", "delete", HOTSPOT_CON)
+
+
+def join_network(ssid, password, rescue_hotspot):
+    """Join a network. On failure: restore hotspot (if we were hosting) or
+    let NetworkManager fall back to the previous known network."""
+    existed_before = ssid in saved_wifi_profiles()
+    _set_status(phase="joining", error=None, target=ssid)
+    if rescue_hotspot:
+        write_state(joining=ssid)
+        stop_hotspot(delete=False)
     args = ["device", "wifi", "connect", ssid, "ifname", "wlan0"]
     if password:
         args += ["password", password]
     r = nmcli(*args, timeout=JOIN_TIMEOUT)
     if r.returncode == 0 and wifi_connected():
         log(f"joined '{ssid}'")
-        nmcli("connection", "delete", HOTSPOT_CON)
+        stop_hotspot()
         clear_state()
-        with _status_lock:
-            _status.update(phase="done")
+        _set_status(phase="connected", error=None)
         return True
     error = (r.stderr or r.stdout).strip().splitlines()
     error = error[-1] if error else "unknown error"
     log(f"join '{ssid}' failed: {error}")
-    # a failed profile would otherwise be retried forever by NM
-    nmcli("connection", "delete", ssid)
-    msg = (f"Couldn't join {ssid} — wrong password? The setup Wi-Fi is "
-           "back; reconnect and try again.")
-    with _status_lock:
-        _status.update(phase="hotspot", error=msg)
-    start_hotspot()
-    write_state(error=msg)
+    if not existed_before:
+        # don't leave a broken new profile around to auto-retry forever
+        nmcli("connection", "delete", ssid)
+    msg = f"Couldn't join {ssid} — wrong password?"
+    _set_status(phase="hotspot" if rescue_hotspot else "connected", error=msg)
+    if rescue_hotspot:
+        start_hotspot()
+        write_state(error=msg)
     return False
 
+
+# ------------------------------------------------------------ portal (:80)
 
 PORTAL_PAGE = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
@@ -225,13 +267,14 @@ def _network_rows():
     rows = []
     for ssid, signal, secured in _scanned:
         safe = html.escape(ssid, quote=True)
-        lock = "🔒 " if secured else ""
+        lock = "&#128274; " if secured else ""
         rows.append(
             f'<label class="net"><input type="radio" name="ssid" '
             f'value="{safe}">{lock}{html.escape(ssid)}'
             f'<span class="sig">{signal}%</span></label>'
         )
-    return "\n".join(rows) or '<p class="muted">No networks found — type yours below.</p>'
+    return "\n".join(rows) or \
+        '<p class="muted">No networks found — type yours below.</p>'
 
 
 def make_portal_handler():
@@ -251,12 +294,11 @@ def make_portal_handler():
             path = self.path.split("?", 1)[0]
             host = (self.headers.get("Host") or "").split(":")[0]
             if path in PROBE_PATHS or host not in (PORTAL_IP, ""):
-                # captive-portal probe or stray domain -> bounce to us
                 self.send_response(302)
                 self.send_header("Location", f"http://{PORTAL_IP}/")
                 self.end_headers()
                 return
-            with _status_lock:
+            with _lock:
                 error = _status.get("error")
             banner = f'<p class="err">{html.escape(error)}</p>' if error else ""
             self._page(PORTAL_PAGE.replace("__NETWORKS__", _network_rows())
@@ -276,8 +318,8 @@ def make_portal_handler():
                                     '<p class="err">Pick or type a network first.</p>'))
                 return
             self._page(JOINING_PAGE.replace("__SSID__", html.escape(ssid)))
-            threading.Thread(target=join_network, args=(ssid, password),
-                             daemon=True).start()
+            threading.Thread(target=join_network,
+                             args=(ssid, password, True), daemon=True).start()
 
         def log_message(self, fmt, *args):
             pass
@@ -285,37 +327,136 @@ def make_portal_handler():
     return Portal
 
 
-def main():
-    if os.environ.get("CTP_WIFI_FAKE"):  # local dev: portal UI only
-        global _scanned
-        _scanned = [("HomeWiFi", 92, True), ("Neighbor5G", 61, True),
-                    ("CafeOpen", 40, False)]
-    else:
-        deadline = time.time() + GRACE_SECONDS
-        while time.time() < deadline:
-            if wifi_connected():
-                log("network present; provisioning not needed")
-                clear_state()
-                return
-            time.sleep(3)
-        log("no network after grace period; entering setup mode")
-        _scanned[:] = scan_networks()
-        log(f"scanned {len(_scanned)} networks")
-        if not start_hotspot():
-            return
-        write_state()
-        with _status_lock:
-            _status.update(phase="hotspot")
-
+def run_hotspot_mode():
+    """Host the setup hotspot + portal until we're online again."""
+    global _scanned
+    _scanned = scan_networks()
+    log(f"scanned {len(_scanned)} networks")
+    if not start_hotspot():
+        time.sleep(30)
+        return
+    write_state()
+    _set_status(phase="hotspot")
     server = ThreadingHTTPServer(("0.0.0.0", 80), make_portal_handler())
-    server.timeout = 5  # wake periodically so we notice a finished join
-    log("portal listening on :80")
+    server.timeout = 5
+    last_recheck = time.time()
+    try:
+        while True:
+            server.handle_request()
+            with _lock:
+                phase = _status.get("phase")
+            if phase == "connected":
+                return
+            # every couple of minutes, quietly check whether a known
+            # network came back (e.g. the router finished rebooting)
+            if phase == "hotspot" and saved_wifi_profiles() and \
+                    time.time() - last_recheck > RECHECK_HOTSPOT:
+                last_recheck = time.time()
+                log("rechecking known networks...")
+                stop_hotspot(delete=False)
+                deadline = time.time() + 25
+                while time.time() < deadline and not wifi_connected():
+                    time.sleep(3)
+                if wifi_connected():
+                    log("known network is back")
+                    stop_hotspot()
+                    clear_state()
+                    _set_status(phase="connected", error=None)
+                    return
+                start_hotspot()
+                write_state()
+    finally:
+        server.server_close()
+
+
+# ---------------------------------------------------- control API (:8079)
+
+def make_control_handler():
+    class Control(BaseHTTPRequestHandler):
+        server_version = "ClaudeTrackerWifi/1.0"
+
+        def _json(self, payload, code=200):
+            data = json.dumps(payload).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path == "/networks":
+                nets = scan_networks()
+                self._json({
+                    "current": current_ssid(),
+                    "networks": [
+                        {"ssid": s, "signal": sig, "secured": sec}
+                        for s, sig, sec in nets
+                    ],
+                })
+            elif path == "/status":
+                with _lock:
+                    payload = dict(_status)
+                payload["current"] = current_ssid()
+                self._json(payload)
+            else:
+                self._json({"error": "not found"}, 404)
+
+        def do_POST(self):
+            path = self.path.split("?", 1)[0]
+            if path != "/join":
+                self._json({"error": "not found"}, 404)
+                return
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8"))
+            except ValueError:
+                data = {}
+            ssid = str(data.get("ssid", "")).strip()
+            if not ssid:
+                self._json({"ok": False, "error": "missing ssid"}, 400)
+                return
+            rescue = hotspot_active()
+            threading.Thread(
+                target=join_network,
+                args=(ssid, str(data.get("password", "")), rescue),
+                daemon=True,
+            ).start()
+            self._json({"ok": True})
+
+        def log_message(self, fmt, *args):
+            pass
+
+    return Control
+
+
+def main():
+    clear_state()
+    control = ThreadingHTTPServer(("127.0.0.1", CONTROL_PORT),
+                                  make_control_handler())
+    threading.Thread(target=control.serve_forever, daemon=True).start()
+    log(f"control API on 127.0.0.1:{CONTROL_PORT}")
+
+    down_since = time.time()
     while True:
-        server.handle_request()
-        with _status_lock:
-            if _status.get("phase") == "done":
-                break
-    log("provisioning complete")
+        if wifi_connected():
+            if _status.get("phase") != "joining":
+                _set_status(phase="connected")
+            down_since = None
+        else:
+            if down_since is None:
+                down_since = time.time()
+                log("network lost; waiting before starting setup hotspot")
+            grace = FIRST_BOOT_GRACE if not saved_wifi_profiles() \
+                else RECONNECT_GRACE
+            with _lock:
+                joining = _status.get("phase") == "joining"
+            if not joining and not hotspot_active() and \
+                    time.time() - down_since > grace:
+                log("entering setup hotspot mode")
+                run_hotspot_mode()
+                down_since = None
+        time.sleep(10)
 
 
 if __name__ == "__main__":
