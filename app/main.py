@@ -81,6 +81,7 @@ class State:
         self.prev_utilization = None  # {window key: utilization} from last poll
         self.last_activity = 0.0      # when utilization last went up
         self.pending_verifier = None  # PKCE verifier during phone sign-in
+        self.wifi = {"ssid": None, "ip": None}  # current network
 
     def snapshot(self):
         with self.lock:
@@ -90,6 +91,7 @@ class State:
                 "usage_error": self.usage_error,
                 "usage_updated": self.usage_updated,
                 "battery": self.battery if self.battery_present else None,
+                "wifi": dict(self.wifi),
                 "session_active": bool(
                     self.last_activity
                     and time.time() - self.last_activity < ACTIVE_SECONDS
@@ -125,6 +127,7 @@ def demo_snapshot():
         "usage_error": None,
         "usage_updated": t,
         "battery": {"percent": 76.0, "charging": False, "plugged": False},
+        "wifi": {"ssid": "HomeWiFi"},
         "session_active": True,
         "night": {"start": "22:00", "end": "07:00"},
         "server_time": t,
@@ -187,7 +190,17 @@ def start_pollers(state, config):
                     state.battery_present = True
             time.sleep(max(5, int(config["battery_poll_seconds"])))
 
-    for target in (poll_usage, poll_battery):
+    def poll_wifi():
+        while True:
+            try:
+                ssid = _wifi_api("/status").get("current")
+            except (urllib.error.URLError, OSError, ValueError):
+                ssid = None
+            with state.lock:
+                state.wifi = {"ssid": ssid}
+            time.sleep(15)
+
+    for target in (poll_usage, poll_battery, poll_wifi):
         threading.Thread(target=target, daemon=True).start()
 
 

@@ -460,6 +460,20 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
         draw.rounded_rectangle((186, 30, 186 + max(3, int(44 * pct / 100)),
                                 37), 3, fill=color)
 
+    # current Wi-Fi network, small under the battery (right side, clear of Pip)
+    ssid = (snapshot.get("wifi") or {}).get("ssid")
+    if ssid:
+        label = str(ssid)[:16]
+        lw = draw.textlength(label, font=fonts["small"])
+        y0 = 44 if battery else 10
+        bx = 230 - lw - 11  # 3 signal bars before the name
+        for i in range(3):
+            bh = 3 + i * 2
+            draw.rectangle((bx + i * 3, y0 + 9 - bh, bx + i * 3 + 2, y0 + 9),
+                           fill=theme["muted"])
+        draw.text((230 - lw, y0), label, font=fonts["small"],
+                  fill=theme["muted"])
+
     sprite = (sprites or {}).get(mood)
     if sprite:
         bounce = -3 if (mood in ("happy", "panic") and frame % 2) else 0

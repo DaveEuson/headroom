@@ -215,6 +215,12 @@ function render(data) {
 
   if (data.night) night = data.night;
 
+  const wifiLink = el("wifi-link");
+  if (wifiLink) {
+    const ssid = data.wifi && data.wifi.ssid;
+    wifiLink.textContent = ssid ? "📶 " + ssid : "📶 Wi-Fi settings";
+  }
+
   renderMeters(data.windows || []);
   renderMood(data.windows || []);
   renderBattery(data.battery);
