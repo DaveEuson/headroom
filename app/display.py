@@ -598,6 +598,27 @@ def _render_history(theme, fonts, snapshot):
     return img
 
 
+def _render_phone_qr(theme, fonts, snapshot, url):
+    """Rotating LCD screen: a scannable QR to open the dashboard on a phone."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
+    draw = ImageDraw.Draw(img)
+    _draw_header(draw, snapshot, theme, fonts)
+    _center(draw, "Open on your phone", 54, fonts["label"], theme["ink"])
+    qr = _qr_image(url, 128) if url else None
+    if qr:
+        img.paste(qr, ((WIDTH - qr.width) // 2, 84))
+        yb = 84 + qr.height + 10
+    else:
+        yb = 210
+    if url:
+        _center(draw, url.replace("http://", ""), yb, fonts["small"],
+                theme["accent"])
+    _draw_wifi_footer(draw, snapshot, theme, fonts)
+    return img
+
+
 def render(snapshot, frame, fonts, sprites=None, setup_url=None):
     from PIL import Image, ImageDraw
 
@@ -616,12 +637,23 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
     if not error and sw is not None and (100 - sw.get("utilization", 0)) <= 0.5:
         return _render_maxed(theme, fonts, snapshot, frame, sprites)
 
-    # Every ~17s, spend ~5s showing the usage-history graph instead.
-    hist = snapshot.get("history") or {}
-    if (snapshot.get("lcd_history", True) and not error
-            and any(len(v) >= 2 for v in hist.values())
-            and frame % 34 >= 24):
-        return _render_history(theme, fonts, snapshot)
+    # Every ~17s, spend ~5s on an aux screen: alternate the usage-history
+    # graph and a "scan me" QR so you can open the dashboard on your phone.
+    if not error and frame % 34 >= 24:
+        hist = snapshot.get("history") or {}
+        have_hist = (snapshot.get("lcd_history", True)
+                     and any(len(v) >= 2 for v in hist.values()))
+        dash = None
+        if setup_url:
+            dash = (setup_url[:-len("/setup")]
+                    if setup_url.endswith("/setup") else setup_url)
+        show_history = have_hist and (dash is None or (frame // 34) % 2 == 0)
+        if show_history:
+            return _render_history(theme, fonts, snapshot)
+        if dash:
+            return _render_phone_qr(theme, fonts, snapshot, dash)
+        if have_hist:
+            return _render_history(theme, fonts, snapshot)
 
     img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
     draw = ImageDraw.Draw(img)
