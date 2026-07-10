@@ -557,6 +557,47 @@ def _render_maxed(theme, fonts, snapshot, frame, sprites):
     return img
 
 
+def _render_history(theme, fonts, snapshot):
+    """Rotating LCD screen: a line graph of a window's % left over time."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
+    draw = ImageDraw.Draw(img)
+    _draw_header(draw, snapshot, theme, fonts)
+    hist = snapshot.get("history") or {}
+    key = "five_hour" if hist.get("five_hour") else next(
+        (k for k, v in hist.items() if len(v) >= 2), None)
+    series = hist.get(key or "", [])
+    title = SHORT_LABELS.get(key, "Usage")
+    x0, y0, x1, y1 = 16, 92, 224, 214
+    _center(draw, f"{title} — usage left", 54, fonts["label"], theme["ink"])
+    draw.line((x0, y1, x1, y1), fill=theme["muted"])   # baseline (0%)
+    if len(series) < 2:
+        _center(draw, "collecting history…", (y0 + y1) // 2,
+                fonts["small"], theme["muted"])
+        _draw_wifi_footer(draw, snapshot, theme, fonts)
+        return img
+    span_h = (series[-1][0] - series[0][0]) / 3600.0
+    draw.text((x0, 74), f"last {span_h:.0f}h" if span_h >= 1 else "last <1h",
+              font=fonts["small"], fill=theme["muted"])
+    n = len(series)
+    pts = []
+    for i, (_ts, util) in enumerate(series):
+        left = max(0.0, min(100.0, 100.0 - util))
+        px = x0 + (i / (n - 1)) * (x1 - x0)
+        py = y1 - (left / 100.0) * (y1 - y0)
+        pts.append((px, py))
+    cur = max(0.0, min(100.0, 100.0 - series[-1][1]))
+    sev = "crit" if cur <= 10 else "warn" if cur <= 30 else "accent"
+    draw.polygon([(x0, y1)] + pts + [(x1, y1)], fill=theme[sev + "_track"])
+    draw.line(pts, fill=theme[sev], width=2)
+    ex, ey = pts[-1]
+    draw.ellipse((ex - 3, ey - 3, ex + 3, ey + 3), fill=theme[sev])
+    _center(draw, f"{cur:.0f}% left now", y1 + 12, fonts["big"], theme["ink"])
+    _draw_wifi_footer(draw, snapshot, theme, fonts)
+    return img
+
+
 def render(snapshot, frame, fonts, sprites=None, setup_url=None):
     from PIL import Image, ImageDraw
 
@@ -574,6 +615,13 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
     sw = _session_window(snapshot)
     if not error and sw is not None and (100 - sw.get("utilization", 0)) <= 0.5:
         return _render_maxed(theme, fonts, snapshot, frame, sprites)
+
+    # Every ~17s, spend ~5s showing the usage-history graph instead.
+    hist = snapshot.get("history") or {}
+    if (snapshot.get("lcd_history", True) and not error
+            and any(len(v) >= 2 for v in hist.values())
+            and frame % 34 >= 24):
+        return _render_history(theme, fonts, snapshot)
 
     img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
     draw = ImageDraw.Draw(img)

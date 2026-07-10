@@ -42,6 +42,7 @@ DEFAULT_CONFIG = {
     "push_token": "",         # optional shared secret the companion must send
     "theme": "auto",          # "auto" (day/night by schedule), "light", "dark"
     "clock_24h": False,       # 24-hour time instead of AM/PM
+    "lcd_history": True,      # rotate a usage-history graph onto the LCD
 }
 
 # How long after the last observed usage increase we still call the
@@ -85,10 +86,62 @@ def save_config(config):
     os.replace(tmp, path)
 
 
+# Usage history: a small per-window ring buffer of [epoch, utilization] points,
+# persisted so the trend survives a restart. At ~2-min pushes, 180 points is
+# roughly the last 6 hours.
+HISTORY_CAP = 180
+HISTORY_MIN_GAP = 90          # seconds; coalesce points closer than this
+
+
+def history_path():
+    return os.path.join(os.path.dirname(config_path()) or ".", "history.json")
+
+
+def load_history():
+    try:
+        with open(history_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            return {str(k): [p for p in v
+                             if isinstance(p, list) and len(p) == 2]
+                    for k, v in data.items()}
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def save_history(history):
+    try:
+        path = history_path()
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(history, fh)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def record_history(state, windows, now):
+    """Append the current utilization of each window to its series (capped)."""
+    for w in windows:
+        key = w.get("key")
+        if not key:
+            continue
+        series = state.history.setdefault(key, [])
+        point = [now, round(float(w["utilization"]), 1)]
+        if series and now - series[-1][0] < HISTORY_MIN_GAP:
+            series[-1] = point          # coalesce rapid pushes into one point
+        else:
+            series.append(point)
+        if len(series) > HISTORY_CAP:
+            del series[:-HISTORY_CAP]
+
+
 # Settings the /settings page may change, each with a validator/normalizer.
 SETTINGS_FIELDS = {
     "theme": lambda v: v if v in ("auto", "light", "dark") else None,
     "clock_24h": lambda v: bool(v),
+    "lcd_history": lambda v: bool(v),
 }
 
 
@@ -124,6 +177,7 @@ class State:
         self.prev_utilization = None  # {window key: utilization} from last poll
         self.last_activity = 0.0      # when utilization last went up
         self.wifi = {"ssid": None, "ip": None}  # current network
+        self.history = load_history()  # {key: [[epoch, utilization], ...]}
 
     def snapshot(self):
         with self.lock:
@@ -145,6 +199,8 @@ class State:
                 },
                 "theme": self.config.get("theme", "auto"),
                 "clock_24h": bool(self.config.get("clock_24h", False)),
+                "lcd_history": bool(self.config.get("lcd_history", True)),
+                "history": {k: list(v) for k, v in self.history.items()},
                 "server_time": time.time(),
             }
 
@@ -178,8 +234,25 @@ def demo_snapshot():
         "night": {"start": "22:00", "end": "07:00"},
         "theme": "auto",
         "clock_24h": False,
+        "lcd_history": True,
+        "history": _demo_history(t, session, weekly, opus),
         "server_time": t,
     }
+
+
+def _demo_history(t, session, weekly, opus):
+    """Synthetic ~5h of history so the graph/sparklines preview with data."""
+    n = 80
+    pts = {"five_hour": [], "seven_day": [], "seven_day_opus": []}
+    for i in range(n):
+        ago = (n - 1 - i) * 180          # 3-min spacing
+        ts = t - ago
+        f = i / (n - 1)
+        pts["five_hour"].append([ts, round(session * (0.15 + 0.85 * f) +
+                                            3 * math.sin(i / 4), 1)])
+        pts["seven_day"].append([ts, round(weekly * (0.7 + 0.3 * f), 1)])
+        pts["seven_day_opus"].append([ts, round(opus * (0.8 + 0.2 * f), 1)])
+    return pts
 
 
 def start_pollers(state, config):
@@ -310,6 +383,9 @@ def apply_push(state, config, payload):
         state.usage = {"windows": clean, "plan": payload.get("plan")}
         state.usage_error = None
         state.usage_updated = time.time()
+        record_history(state, clean, time.time())
+        history_copy = {k: list(v) for k, v in state.history.items()}
+    save_history(history_copy)   # persist outside the lock (file I/O)
 
 
 WIFI_API = "http://127.0.0.1:8079"   # wifi_setup.py's localhost control API
@@ -509,6 +585,10 @@ SETTINGS_PAGE = """<!DOCTYPE html>
       <div class="lab">24-hour clock<small>Show 18:30 instead of 6:30 PM</small></div>
       <label class="sw"><input type="checkbox" id="clock_24h"><span></span></label>
     </div>
+    <div class="row">
+      <div class="lab">Usage history on screen<small>Rotate a trend graph onto the LCD</small></div>
+      <label class="sw"><input type="checkbox" id="lcd_history"><span></span></label>
+    </div>
   </div>
 
   <div class="status" id="status"></div>
@@ -527,6 +607,7 @@ SETTINGS_PAGE = """<!DOCTYPE html>
       var s = await (await fetch("/api/settings")).json();
       document.getElementById("theme").value = s.theme || "auto";
       document.getElementById("clock_24h").checked = !!s.clock_24h;
+      document.getElementById("lcd_history").checked = !!s.lcd_history;
     } catch (e) { flash("Couldn't load settings.", false); }
   }
   async function save(patch) {
@@ -542,6 +623,9 @@ SETTINGS_PAGE = """<!DOCTYPE html>
   });
   document.getElementById("clock_24h").addEventListener("change", function(e){
     save({ clock_24h: e.target.checked });
+  });
+  document.getElementById("lcd_history").addEventListener("change", function(e){
+    save({ lcd_history: e.target.checked });
   });
   load();
 </script>

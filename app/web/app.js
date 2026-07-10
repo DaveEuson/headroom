@@ -74,6 +74,23 @@ function fmtClock(date) {
   return date.toLocaleString([], opts);
 }
 
+// A tiny SVG sparkline of "% left" over time (declining = burning down).
+function sparkSVG(series) {
+  if (!Array.isArray(series) || series.length < 2) return "";
+  const W = 100, H = 22, n = series.length;
+  const pts = series.map((p, i) => {
+    const left = Math.max(0, Math.min(100, 100 - p[1]));
+    const x = (i / (n - 1)) * W;
+    const y = H - (left / 100) * H;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const line = pts.join(" ");
+  const area = `0,${H} ${line} ${W},${H}`;
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">` +
+    `<polygon class="spark-area" points="${area}"></polygon>` +
+    `<polyline class="spark-line" points="${line}"></polyline></svg>`;
+}
+
 function renderMeters(windows) {
   const box = el("meters");
   box.innerHTML = "";
@@ -81,6 +98,7 @@ function renderMeters(windows) {
     box.innerHTML = '<p class="muted loading">No usage windows reported yet.</p>';
     return;
   }
+  const hist = (latest && latest.history) || {};
   for (const w of windows) {
     const remaining = Math.max(0, Math.min(100, 100 - w.utilization));
     const sev = severity(remaining);
@@ -96,6 +114,7 @@ function renderMeters(windows) {
         <span class="win-value">${shown}<span class="unit">% left</span></span>
       </div>
       <div class="meter"><div class="fill" style="width:${remaining}%"></div></div>
+      ${sparkSVG(hist[w.key])}
       <div class="win-foot">
         <span class="reset"></span>
         <span class="state">${stateText(sev)}</span>
