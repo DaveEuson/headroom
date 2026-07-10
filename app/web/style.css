@@ -196,6 +196,17 @@ body {
 .window.crit .meter { background: var(--crit-track); }
 .window.crit .fill  { background: var(--crit); }
 
+.spark { display: block; width: 100%; height: 22px; overflow: visible; }
+.spark-line {
+  fill: none; stroke: var(--accent); stroke-width: 1.5;
+  stroke-linejoin: round; vector-effect: non-scaling-stroke;
+}
+.spark-area { fill: var(--accent); opacity: 0.12; stroke: none; }
+.window.low  .spark-line { stroke: var(--warn); }
+.window.low  .spark-area { fill: var(--warn); }
+.window.crit .spark-line { stroke: var(--crit); }
+.window.crit .spark-area { fill: var(--crit); }
+
 .win-foot {
   display: flex;
   justify-content: space-between;

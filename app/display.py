@@ -94,15 +94,32 @@ class ST7789:
 
         self.dc = DigitalOutputDevice(DC_PIN)
         self.rst = DigitalOutputDevice(RST_PIN, initial_value=True)
-        # Whisplay backlight is ACTIVE-LOW (pin LOW = lit). active_high=False
-        # makes initial_value=True drive the pin low, i.e. backlight on.
-        self.backlight = DigitalOutputDevice(
-            BL_PIN, active_high=False, initial_value=True)
+        # Whisplay backlight is ACTIVE-LOW (pin LOW = lit). Prefer PWM so we
+        # can dim; fall back to plain on/off if PWM isn't available.
+        self._pwm_backlight = False
+        try:
+            from gpiozero import PWMOutputDevice
+            self.backlight = PWMOutputDevice(
+                BL_PIN, active_high=False, initial_value=1.0, frequency=1000)
+            self._pwm_backlight = True
+        except Exception:
+            self.backlight = DigitalOutputDevice(
+                BL_PIN, active_high=False, initial_value=True)
         self.spi = spidev.SpiDev()
         self.spi.open(0, 0)
         self.spi.max_speed_hz = SPI_HZ
         self.spi.mode = 0
         self._init_panel()
+
+    def set_brightness(self, level):
+        """level 0.0-1.0. With PWM this dims; without, it's on/off."""
+        level = max(0.0, min(1.0, float(level)))
+        if self._pwm_backlight:
+            self.backlight.value = level
+        elif level <= 0.02:
+            self.backlight.off()
+        else:
+            self.backlight.on()
 
     def _cmd(self, command, *params):
         self.dc.off()
@@ -201,6 +218,28 @@ def _is_night(snapshot):
         return False
     return (start <= mins or mins < end) if start > end \
         else (start <= mins < end)
+
+
+def _target_brightness(snapshot):
+    """Backlight level 0.0-1.0 from the brightness setting, dimmed at night."""
+    try:
+        b = max(0, min(100, int(snapshot.get("brightness", 100))))
+    except (TypeError, ValueError):
+        b = 100
+    if snapshot.get("night_dim", True) and _is_night(snapshot):
+        b = min(b, 15)          # gentle night glow
+    return b / 100.0
+
+
+def _theme_for(snapshot, night):
+    """Colors follow the 'theme' setting; 'auto' tracks the day/night schedule.
+    (This is separate from `night`, which decides whether the mascot sleeps.)"""
+    pref = (snapshot.get("theme") or "auto").lower()
+    if pref == "dark":
+        return THEMES["night"]
+    if pref == "light":
+        return THEMES["day"]
+    return THEMES["night" if night else "day"]
 
 
 def _mood(snapshot, night):
@@ -470,7 +509,10 @@ def _render_setup(theme, fonts, url):
 
 def _draw_header(draw, snapshot, theme, fonts):
     """Clock (left) + battery (right). Wi-Fi lives in the footer now."""
-    clock = time.strftime("%I:%M %p").lstrip("0")
+    if snapshot.get("clock_24h"):
+        clock = time.strftime("%H:%M")
+    else:
+        clock = time.strftime("%I:%M %p").lstrip("0")
     draw.text((10, 6), clock, font=fonts["clock"], fill=theme["ink"])
     battery = snapshot.get("battery")
     if battery:
@@ -543,11 +585,73 @@ def _render_maxed(theme, fonts, snapshot, frame, sprites):
     return img
 
 
+def _render_history(theme, fonts, snapshot):
+    """Rotating LCD screen: a line graph of a window's % left over time."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
+    draw = ImageDraw.Draw(img)
+    _draw_header(draw, snapshot, theme, fonts)
+    hist = snapshot.get("history") or {}
+    key = "five_hour" if hist.get("five_hour") else next(
+        (k for k, v in hist.items() if len(v) >= 2), None)
+    series = hist.get(key or "", [])
+    title = SHORT_LABELS.get(key, "Usage")
+    x0, y0, x1, y1 = 16, 92, 224, 214
+    _center(draw, f"{title} — usage left", 54, fonts["label"], theme["ink"])
+    draw.line((x0, y1, x1, y1), fill=theme["muted"])   # baseline (0%)
+    if len(series) < 2:
+        _center(draw, "collecting history…", (y0 + y1) // 2,
+                fonts["small"], theme["muted"])
+        _draw_wifi_footer(draw, snapshot, theme, fonts)
+        return img
+    span_h = (series[-1][0] - series[0][0]) / 3600.0
+    draw.text((x0, 74), f"last {span_h:.0f}h" if span_h >= 1 else "last <1h",
+              font=fonts["small"], fill=theme["muted"])
+    n = len(series)
+    pts = []
+    for i, (_ts, util) in enumerate(series):
+        left = max(0.0, min(100.0, 100.0 - util))
+        px = x0 + (i / (n - 1)) * (x1 - x0)
+        py = y1 - (left / 100.0) * (y1 - y0)
+        pts.append((px, py))
+    cur = max(0.0, min(100.0, 100.0 - series[-1][1]))
+    sev = "crit" if cur <= 10 else "warn" if cur <= 30 else "accent"
+    draw.polygon([(x0, y1)] + pts + [(x1, y1)], fill=theme[sev + "_track"])
+    draw.line(pts, fill=theme[sev], width=2)
+    ex, ey = pts[-1]
+    draw.ellipse((ex - 3, ey - 3, ex + 3, ey + 3), fill=theme[sev])
+    _center(draw, f"{cur:.0f}% left now", y1 + 12, fonts["big"], theme["ink"])
+    _draw_wifi_footer(draw, snapshot, theme, fonts)
+    return img
+
+
+def _render_phone_qr(theme, fonts, snapshot, url):
+    """Rotating LCD screen: a scannable QR to open the dashboard on a phone."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
+    draw = ImageDraw.Draw(img)
+    _draw_header(draw, snapshot, theme, fonts)
+    _center(draw, "Open on your phone", 54, fonts["label"], theme["ink"])
+    qr = _qr_image(url, 128) if url else None
+    if qr:
+        img.paste(qr, ((WIDTH - qr.width) // 2, 84))
+        yb = 84 + qr.height + 10
+    else:
+        yb = 210
+    if url:
+        _center(draw, url.replace("http://", ""), yb, fonts["small"],
+                theme["accent"])
+    _draw_wifi_footer(draw, snapshot, theme, fonts)
+    return img
+
+
 def render(snapshot, frame, fonts, sprites=None, setup_url=None):
     from PIL import Image, ImageDraw
 
-    night = _is_night(snapshot)
-    theme = THEMES["night" if night else "day"]
+    night = _is_night(snapshot)          # drives the mascot sleeping
+    theme = _theme_for(snapshot, night)  # colors: honors the theme setting
     wifi = _wifi_setup_state()
     if wifi:
         return _render_wifi_setup(theme, fonts, wifi)
@@ -560,6 +664,24 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
     sw = _session_window(snapshot)
     if not error and sw is not None and (100 - sw.get("utilization", 0)) <= 0.5:
         return _render_maxed(theme, fonts, snapshot, frame, sprites)
+
+    # Every ~17s, spend ~5s on an aux screen: alternate the usage-history
+    # graph and a "scan me" QR so you can open the dashboard on your phone.
+    if not error and frame % 34 >= 24:
+        hist = snapshot.get("history") or {}
+        have_hist = (snapshot.get("lcd_history", True)
+                     and any(len(v) >= 2 for v in hist.values()))
+        dash = None
+        if setup_url:
+            dash = (setup_url[:-len("/setup")]
+                    if setup_url.endswith("/setup") else setup_url)
+        show_history = have_hist and (dash is None or (frame // 34) % 2 == 0)
+        if show_history:
+            return _render_history(theme, fonts, snapshot)
+        if dash:
+            return _render_phone_qr(theme, fonts, snapshot, dash)
+        if have_hist:
+            return _render_history(theme, fonts, snapshot)
 
     img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
     draw = ImageDraw.Draw(img)
@@ -625,7 +747,9 @@ def run(snapshot_fn, config):
         if frame % 60 == 0:  # refresh in case the IP changed / came up late
             setup_url = _local_url(config, "/setup") or setup_url
         try:
-            panel.show(render(snapshot_fn(), frame, fonts, sprites, setup_url))
+            snap = snapshot_fn()
+            panel.show(render(snap, frame, fonts, sprites, setup_url))
+            panel.set_brightness(_target_brightness(snap))
         except Exception as exc:
             print(f"HAT display error: {exc}", file=sys.stderr)
             time.sleep(10)

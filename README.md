@@ -16,9 +16,18 @@ used right now — no terminal, no menubar, no estimating.
 - **Meters and percentages** for every usage window Claude reports (5-hour
   session, weekly, weekly Opus, …) — fuel-gauge style, so the bar shows how
   much you have **left**; amber under 30%, red under 10%
-- **Reset countdowns** — live "resets in 2h 13m" plus the local clock time
+- **Reset countdowns** — live "resets in 2h 13m" plus the local clock time,
+  and a big full-screen countdown the moment a session hits 100%
+- **Usage history** — a sparkline under each meter on the web, and a trend
+  graph that rotates onto the LCD, so you can see how fast you're burning
 - **A clock**, and Claude's own look: the warm cream claude.ai theme by day,
-  its dark theme at night (on a configurable schedule)
+  its dark theme at night — or force light/dark, and switch to a 24-hour clock
+- **Alerts** — an optional beep from the Whisplay speaker and/or a push to
+  your phone (ntfy or Pushover) when you run out and when usage is restored
+- **A settings page** (`/settings`) for all of the above — theme, clock,
+  brightness + night dimming, on-screen history, and alerts — saved on the Pi
+- **Scan-to-open QR** rotates onto the LCD so you can pull the dashboard up
+  on your phone anytime, not just during setup
 - **PiSugar battery level** with a charging indicator
 - **Whisplay HAT support** — draws a compact version of the dashboard
   right on the PiSugar Whisplay's 1.69″ LCD (240×280, ST7789), no browser
@@ -47,7 +56,47 @@ process serving one page. It idles in a few MB of RAM on the Zero 2 W, and
 you view it from any browser on your network (phone, laptop, or a small
 screen on the Pi itself in kiosk mode).
 
-## Setup (two steps)
+## Got a kit? First plug-in
+
+If you bought a pre-assembled kit, the SD card already has everything
+installed and set to start on boot — you never touch a terminal. From
+power-on to live meters is about five minutes:
+
+1. **Plug in the USB-C power.** It boots in under a minute. (The PiSugar
+   battery means it's instant-on and can even run untethered.)
+2. **Join it to your Wi-Fi.** On first boot it makes its own hotspot and the
+   screen shows a QR code. Scan it with your phone — a setup page opens by
+   itself. Pick your home network and enter the password; the screen shows
+   *"Connecting…"* and hops over.
+3. **The screen says "Almost there"** and shows an address. On the computer
+   where you use Claude Code, open that address in a browser (e.g.
+   `http://claudetracker.local:8080/setup`).
+4. **Download the companion** for your OS from that page and double-click it.
+   (First launch: macOS → right-click → **Open**; Windows → **More info →
+   Run anyway**.) It finds the tracker on the network by itself, sends the
+   first reading, and sets itself to run at every login.
+5. **Done.** The QR disappears and the screen comes alive — meters, reset
+   countdowns, battery, and Pip reacting to your usage. You never touch the
+   companion again.
+
+> **One requirement:** the companion reads the Claude Code login already on
+> your computer, so you need **Claude Code signed in** on the machine in
+> steps 3–4 (a Pro or Max plan). If you only use Claude in a browser, there's
+> no login for it to read — this tracker is for Claude Code users.
+
+## Build it yourself (two steps)
+
+### What you'll need
+
+| Part | Notes |
+|------|-------|
+| [Raspberry Pi Zero 2 W](https://www.amazon.com/dp/B0FX3SCP5F?tag=daveeuson01-20) | The brain of the tracker. |
+| [Solderless GPIO hammer header](https://www.amazon.com/dp/B0CGRYYY63?tag=daveeuson01-20) **·** or a [soldering kit](https://www.amazon.com/dp/B087767KNW?tag=daveeuson01-20) | The Whisplay HAT needs a 40‑pin header on the Pi. The press‑on "hammer" header adds it with no soldering; or solder your own. Skip if your Pi already has a header. |
+| [PiSugar Whisplay HAT](https://www.amazon.com/dp/B0FPG8S6K6?tag=daveeuson01-20) | The 1.69″ LCD board that sits on top. (Add a PiSugar battery separately if yours doesn't include one.) |
+| [microSD card](https://www.amazon.com/dp/B08L5HMJVW?tag=daveeuson01-20) | 16–32 GB is plenty. Flash it with Raspberry Pi OS Lite. |
+| [3D‑printed case](https://www.printables.com/model/1692376-ground-zero-raspberry-pi-zero-2w-whisplay-case-v1) | Optional. The "Ground Zero" enclosure, designed for the Pi Zero 2 W + Whisplay. Free STL — print it yourself or use a printing service. |
+
+*As an Amazon Associate I earn from qualifying purchases. The 3D‑print model is a free third‑party design.*
 
 ### 1. On the Pi
 
@@ -59,6 +108,11 @@ cd ClaudeTrackerPi
 
 That creates a `claude-tracker` systemd service that starts on boot. The
 installer prints your dashboard URL, e.g. `http://raspberrypi.local:8080`.
+
+> **Set the timezone** so the clock and reset countdowns are right:
+> `sudo raspi-config` → *Localisation Options → Timezone* (or
+> `sudo timedatectl set-timezone America/New_York`). A headless-flashed
+> card often defaults to UTC.
 
 ### 2. Install the companion on your computer
 
@@ -117,6 +171,27 @@ stays hidden — nothing to configure.
 | `night_start` | `"22:00"` | When the screen dims and Pip goes to sleep |
 | `night_end` | `"07:00"` | When Pip wakes up |
 | `hat_display` | `true` | Draw on the Whisplay HAT LCD (auto-off when absent) |
+
+You rarely need to touch `config.json` — most things live on the **Settings
+page** below.
+
+## Settings
+
+Open **`http://<your-pi>:8080/settings`** (or tap *Settings* in the dashboard
+footer). Changes save to the Pi instantly and apply to both the screen and the
+web dashboard:
+
+- **Appearance** — theme (auto / always light / always dark), 24-hour clock,
+  screen **brightness**, and **dim at night**.
+- **Usage history on screen** — toggle the rotating trend graph on the LCD.
+- **Alerts** — a **speaker beep** and/or a **phone push** when you run out of
+  session usage and when it's restored:
+  - **ntfy** (recommended, free, no account): pick a hard-to-guess topic and
+    subscribe to it in the [ntfy app](https://ntfy.sh/).
+  - **Pushover**: register your own app and paste your token + user key.
+  - **Send test** fires a sample alert so you can confirm it works.
+  Audio is **off by default**; to hear it you need ALSA (`sudo apt install
+  alsa-utils`) and the Whisplay's WM8960 audio driver set up.
 
 ## Whisplay HAT screen
 

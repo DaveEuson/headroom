@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import anthropic_usage
 import display
+import notify
 import pisugar
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -40,6 +41,16 @@ DEFAULT_CONFIG = {
     # Anthropic path (no longer works -- Anthropic blocks third-party OAuth).
     "data_source": "push",
     "push_token": "",         # optional shared secret the companion must send
+    "theme": "auto",          # "auto" (day/night by schedule), "light", "dark"
+    "clock_24h": False,       # 24-hour time instead of AM/PM
+    "brightness": 100,        # LCD backlight 0-100 (dims with PWM; on/off else)
+    "night_dim": True,        # dim the LCD during the night window
+    "lcd_history": True,      # rotate a usage-history graph onto the LCD
+    "audio_alerts": False,    # beep on out-of-credits / restored (off default)
+    "push_service": "none",   # "none" | "ntfy" | "pushover"
+    "ntfy_topic": "",         # your ntfy.sh topic
+    "pushover_token": "",     # your own Pushover app token
+    "pushover_user": "",      # your Pushover user key
 }
 
 # How long after the last observed usage increase we still call the
@@ -56,10 +67,14 @@ CONTENT_TYPES = {
 }
 
 
-def load_config():
-    path = os.environ.get(
+def config_path():
+    return os.environ.get(
         "CLAUDE_TRACKER_CONFIG", os.path.join(ROOT, "config.json")
     )
+
+
+def load_config():
+    path = config_path()
     config = dict(DEFAULT_CONFIG)
     if os.path.isfile(path):
         try:
@@ -68,6 +83,113 @@ def load_config():
         except (OSError, ValueError) as exc:
             print(f"Warning: ignoring bad config {path}: {exc}", file=sys.stderr)
     return config
+
+
+def save_config(config):
+    """Persist the full effective config so settings survive a restart."""
+    path = config_path()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(config, fh, indent=2)
+    os.replace(tmp, path)
+
+
+# Usage history: a small per-window ring buffer of [epoch, utilization] points,
+# persisted so the trend survives a restart. At ~2-min pushes, 180 points is
+# roughly the last 6 hours.
+HISTORY_CAP = 180
+HISTORY_MIN_GAP = 90          # seconds; coalesce points closer than this
+
+
+def history_path():
+    return os.path.join(os.path.dirname(config_path()) or ".", "history.json")
+
+
+def load_history():
+    try:
+        with open(history_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            return {str(k): [p for p in v
+                             if isinstance(p, list) and len(p) == 2]
+                    for k, v in data.items()}
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def save_history(history):
+    try:
+        path = history_path()
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(history, fh)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def record_history(state, windows, now):
+    """Append the current utilization of each window to its series (capped)."""
+    for w in windows:
+        key = w.get("key")
+        if not key:
+            continue
+        series = state.history.setdefault(key, [])
+        point = [now, round(float(w["utilization"]), 1)]
+        if series and now - series[-1][0] < HISTORY_MIN_GAP:
+            series[-1] = point          # coalesce rapid pushes into one point
+        else:
+            series.append(point)
+        if len(series) > HISTORY_CAP:
+            del series[:-HISTORY_CAP]
+
+
+# Settings the /settings page may change, each with a validator/normalizer.
+def _clamp_brightness(v):
+    try:
+        return max(10, min(100, int(round(float(v)))))
+    except (TypeError, ValueError):
+        return None
+
+
+# Semi-secret fields: masked in GET, and the mask is ignored on POST so
+# leaving the field untouched doesn't overwrite the saved value.
+SECRET_FIELDS = ("pushover_token", "pushover_user")
+SECRET_MASK = "••••••"
+
+SETTINGS_FIELDS = {
+    "theme": lambda v: v if v in ("auto", "light", "dark") else None,
+    "clock_24h": lambda v: bool(v),
+    "brightness": _clamp_brightness,
+    "night_dim": lambda v: bool(v),
+    "lcd_history": lambda v: bool(v),
+    "audio_alerts": lambda v: bool(v),
+    "push_service": lambda v: v if v in ("none", "ntfy", "pushover") else None,
+    "ntfy_topic": lambda v: str(v)[:80],
+    "pushover_token": lambda v: str(v)[:64],
+    "pushover_user": lambda v: str(v)[:64],
+}
+
+
+def apply_settings(state, payload):
+    """Validate + persist settings from the web form. Returns the applied dict."""
+    if not isinstance(payload, dict):
+        raise ValueError("expected a JSON object")
+    applied = {}
+    for key, normalize in SETTINGS_FIELDS.items():
+        if key not in payload:
+            continue
+        if key in SECRET_FIELDS and payload[key] == SECRET_MASK:
+            continue          # unchanged mask -> keep the saved value
+        value = normalize(payload[key])
+        if value is None:
+            raise ValueError(f"invalid value for {key!r}")
+        applied[key] = value
+    with state.lock:
+        state.config.update(applied)   # same dict the display + snapshot read
+    save_config(state.config)
+    return applied
 
 
 class State:
@@ -84,6 +206,8 @@ class State:
         self.prev_utilization = None  # {window key: utilization} from last poll
         self.last_activity = 0.0      # when utilization last went up
         self.wifi = {"ssid": None, "ip": None}  # current network
+        self.history = load_history()  # {key: [[epoch, utilization], ...]}
+        self.session_maxed = None      # last known "out of session usage" state
 
     def snapshot(self):
         with self.lock:
@@ -103,6 +227,12 @@ class State:
                     "start": self.config.get("night_start", "22:00"),
                     "end": self.config.get("night_end", "07:00"),
                 },
+                "theme": self.config.get("theme", "auto"),
+                "clock_24h": bool(self.config.get("clock_24h", False)),
+                "brightness": self.config.get("brightness", 100),
+                "night_dim": bool(self.config.get("night_dim", True)),
+                "lcd_history": bool(self.config.get("lcd_history", True)),
+                "history": {k: list(v) for k, v in self.history.items()},
                 "server_time": time.time(),
             }
 
@@ -134,8 +264,29 @@ def demo_snapshot():
         "wifi": {"ssid": "HomeWiFi"},
         "session_active": True,
         "night": {"start": "22:00", "end": "07:00"},
+        "theme": "auto",
+        "clock_24h": False,
+        "brightness": 100,
+        "night_dim": True,
+        "lcd_history": True,
+        "history": _demo_history(t, session, weekly, opus),
         "server_time": t,
     }
+
+
+def _demo_history(t, session, weekly, opus):
+    """Synthetic ~5h of history so the graph/sparklines preview with data."""
+    n = 80
+    pts = {"five_hour": [], "seven_day": [], "seven_day_opus": []}
+    for i in range(n):
+        ago = (n - 1 - i) * 180          # 3-min spacing
+        ts = t - ago
+        f = i / (n - 1)
+        pts["five_hour"].append([ts, round(session * (0.15 + 0.85 * f) +
+                                            3 * math.sin(i / 4), 1)])
+        pts["seven_day"].append([ts, round(weekly * (0.7 + 0.3 * f), 1)])
+        pts["seven_day_opus"].append([ts, round(opus * (0.8 + 0.2 * f), 1)])
+    return pts
 
 
 def start_pollers(state, config):
@@ -266,6 +417,20 @@ def apply_push(state, config, payload):
         state.usage = {"windows": clean, "plan": payload.get("plan")}
         state.usage_error = None
         state.usage_updated = time.time()
+        record_history(state, clean, time.time())
+        history_copy = {k: list(v) for k, v in state.history.items()}
+        # out-of-credits / restored transition (5-hour session window)
+        session = next((w["utilization"] for w in clean
+                        if w["key"] == "five_hour"), None)
+        transition = None
+        if session is not None:
+            maxed = session >= 99.5
+            if state.session_maxed is not None and maxed != state.session_maxed:
+                transition = "out" if maxed else "restored"
+            state.session_maxed = maxed
+    save_history(history_copy)   # persist outside the lock (file I/O)
+    if transition:
+        notify.alert(state.config, transition)
 
 
 WIFI_API = "http://127.0.0.1:8079"   # wifi_setup.py's localhost control API
@@ -403,6 +568,212 @@ load();
 </body></html>"""
 
 
+SETTINGS_PAGE = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings</title>
+<style>
+  :root { color-scheme: light dark; --accent:#d97757; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px 18px 40px; font-family:system-ui,-apple-system,
+    "Segoe UI",sans-serif; background:#f0eee6; color:#3d3929; line-height:1.5; }
+  @media (prefers-color-scheme: dark) {
+    body { background:#262624; color:#f5f4ef; }
+    .card { background:#30302e !important; border-color:rgba(245,244,239,.1) !important; }
+    .muted { color:#94907e !important; }
+    select { background:#1a1a19 !important; color:#f5f4ef !important;
+      border-color:rgba(245,244,239,.2) !important; }
+    .row { border-color:rgba(245,244,239,.08) !important; }
+  }
+  .wrap { max-width:460px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  .muted { color:#8a8478; font-size:.9rem; }
+  .card { background:#faf9f5; border:1px solid rgba(61,57,41,.12);
+    border-radius:14px; padding:4px 16px; margin-top:16px; }
+  .row { display:flex; align-items:center; gap:12px; padding:14px 0;
+    border-bottom:1px solid rgba(61,57,41,.08); }
+  .row:last-child { border-bottom:none; }
+  .row .lab { flex:1; }
+  .row .lab small { display:block; color:#8a8478; font-size:.82rem; }
+  select, input[type=text] { font-size:1rem; padding:8px 10px; border-radius:9px;
+    border:1px solid rgba(61,57,41,.25); background:#fff; color:#3d3929; }
+  input[type=text] { width:100%; margin-top:6px; }
+  @media (prefers-color-scheme: dark) {
+    input[type=text] { background:#1a1a19 !important; color:#f5f4ef !important;
+      border-color:rgba(245,244,239,.2) !important; }
+  }
+  .sub { display:none; padding:2px 0 12px; }
+  .sub.on { display:block; }
+  .sub label { display:block; font-size:.82rem; color:#8a8478; margin-top:8px; }
+  h2 { font-size:1rem; margin:14px 2px 2px; color:#8a8478; font-weight:600; }
+  .sw { position:relative; width:46px; height:28px; flex:none; }
+  .sw input { opacity:0; width:0; height:0; }
+  .sw span { position:absolute; inset:0; background:#cfcabb; border-radius:999px;
+    transition:.2s; cursor:pointer; }
+  .sw span::before { content:""; position:absolute; height:22px; width:22px;
+    left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; }
+  .sw input:checked + span { background:var(--accent); }
+  .sw input:checked + span::before { transform:translateX(18px); }
+  .tbtn { font-size:.95rem; font-weight:600; padding:9px 15px; border-radius:9px;
+    flex:none; border:1px solid var(--accent); background:transparent;
+    color:var(--accent); cursor:pointer; }
+  .tbtn:disabled { opacity:.5; cursor:default; }
+  .status { margin-top:14px; font-size:.9rem; min-height:1.2em; }
+  .ok { color:#0f7b3f; } .err { color:#c4453d; }
+  a.back { display:inline-block; margin-top:22px; color:var(--accent);
+    text-decoration:none; font-weight:600; }
+</style>
+</head><body>
+<div class="wrap">
+  <h1>Settings</h1>
+  <p class="muted">Changes save instantly and apply to the screen and this
+    dashboard.</p>
+
+  <div class="card">
+    <div class="row">
+      <div class="lab">Appearance<small>Cream by day, dark at night — or force one</small></div>
+      <select id="theme">
+        <option value="auto">Auto (day / night)</option>
+        <option value="light">Always light</option>
+        <option value="dark">Always dark</option>
+      </select>
+    </div>
+    <div class="row">
+      <div class="lab">24-hour clock<small>Show 18:30 instead of 6:30 PM</small></div>
+      <label class="sw"><input type="checkbox" id="clock_24h"><span></span></label>
+    </div>
+    <div class="row">
+      <div class="lab">Brightness<small>Screen backlight (dims on HATs with PWM)</small></div>
+      <span id="brightval" class="muted" style="min-width:40px;text-align:right">100%</span>
+      <input type="range" id="brightness" min="10" max="100" step="5" style="flex:none;width:110px">
+    </div>
+    <div class="row">
+      <div class="lab">Dim at night<small>Lower the brightness during the night window</small></div>
+      <label class="sw"><input type="checkbox" id="night_dim"><span></span></label>
+    </div>
+    <div class="row">
+      <div class="lab">Usage history on screen<small>Rotate a trend graph onto the LCD</small></div>
+      <label class="sw"><input type="checkbox" id="lcd_history"><span></span></label>
+    </div>
+  </div>
+
+  <h2>Alerts</h2>
+  <div class="card">
+    <div class="row">
+      <div class="lab">Audio alert<small>Beep from the speaker when you run out / recover</small></div>
+      <label class="sw"><input type="checkbox" id="audio_alerts"><span></span></label>
+    </div>
+    <div class="row">
+      <div class="lab">Phone notifications<small>Ping your phone when you run out / recover</small></div>
+      <select id="push_service">
+        <option value="none">Off</option>
+        <option value="ntfy">ntfy (free, no account)</option>
+        <option value="pushover">Pushover (your own keys)</option>
+      </select>
+    </div>
+    <div class="sub" id="sub-ntfy">
+      <label>ntfy topic — pick a hard-to-guess name, then subscribe to it in the ntfy app</label>
+      <input type="text" id="ntfy_topic" placeholder="e.g. claude-dave-7fq2" autocomplete="off">
+    </div>
+    <div class="sub" id="sub-pushover">
+      <label>Pushover application token (register an app at pushover.net)</label>
+      <input type="text" id="pushover_token" placeholder="a1b2c3…" autocomplete="off">
+      <label>Pushover user key</label>
+      <input type="text" id="pushover_user" placeholder="u1v2w3…" autocomplete="off">
+    </div>
+    <div class="row" style="border-bottom:none">
+      <div class="lab">Test it<small>Fire a sample alert to check your setup</small></div>
+      <button id="testbtn" class="tbtn">Send test</button>
+    </div>
+  </div>
+
+  <div class="status" id="status"></div>
+  <a class="back" href="/">← Back to the dashboard</a>
+</div>
+
+<script>
+  var status = document.getElementById("status");
+  function flash(msg, ok) {
+    status.className = "status " + (ok ? "ok" : "err");
+    status.textContent = msg;
+    if (ok) setTimeout(function(){ status.textContent = ""; }, 1500);
+  }
+  function syncSubs() {
+    var svc = document.getElementById("push_service").value;
+    document.getElementById("sub-ntfy").classList.toggle("on", svc === "ntfy");
+    document.getElementById("sub-pushover").classList.toggle("on", svc === "pushover");
+  }
+  async function load() {
+    try {
+      var s = await (await fetch("/api/settings")).json();
+      document.getElementById("theme").value = s.theme || "auto";
+      document.getElementById("clock_24h").checked = !!s.clock_24h;
+      document.getElementById("brightness").value = s.brightness || 100;
+      document.getElementById("brightval").textContent = (s.brightness || 100) + "%";
+      document.getElementById("night_dim").checked = !!s.night_dim;
+      document.getElementById("lcd_history").checked = !!s.lcd_history;
+      document.getElementById("audio_alerts").checked = !!s.audio_alerts;
+      document.getElementById("push_service").value = s.push_service || "none";
+      document.getElementById("ntfy_topic").value = s.ntfy_topic || "";
+      document.getElementById("pushover_token").value = s.pushover_token || "";
+      document.getElementById("pushover_user").value = s.pushover_user || "";
+      syncSubs();
+    } catch (e) { flash("Couldn't load settings.", false); }
+  }
+  async function save(patch) {
+    try {
+      var r = await fetch("/api/settings", { method:"POST",
+        headers:{"Content-Type":"application/json"}, body:JSON.stringify(patch) });
+      var d = await r.json();
+      if (d.ok) flash("Saved.", true); else flash(d.error || "Couldn't save.", false);
+    } catch (e) { flash("Couldn't reach the tracker.", false); }
+  }
+  document.getElementById("theme").addEventListener("change", function(e){
+    save({ theme: e.target.value });
+  });
+  document.getElementById("clock_24h").addEventListener("change", function(e){
+    save({ clock_24h: e.target.checked });
+  });
+  document.getElementById("brightness").addEventListener("input", function(e){
+    document.getElementById("brightval").textContent = e.target.value + "%";
+  });
+  document.getElementById("brightness").addEventListener("change", function(e){
+    save({ brightness: parseInt(e.target.value, 10) });
+  });
+  document.getElementById("testbtn").addEventListener("click", async function(e){
+    var b = e.target; b.disabled = true;
+    status.className = "status"; status.textContent = "Sending test…";
+    try {
+      var d = await (await fetch("/api/test-alert", { method:"POST" })).json();
+      var ok = /sent|playing/.test(d.push + d.audio);
+      status.className = "status " + (ok ? "ok" : "err");
+      status.textContent = "Test — speaker: " + d.audio + " · phone: " + d.push;
+    } catch (err) { flash("Test failed to run.", false); }
+    b.disabled = false;
+  });
+  document.getElementById("night_dim").addEventListener("change", function(e){
+    save({ night_dim: e.target.checked });
+  });
+  document.getElementById("lcd_history").addEventListener("change", function(e){
+    save({ lcd_history: e.target.checked });
+  });
+  document.getElementById("audio_alerts").addEventListener("change", function(e){
+    save({ audio_alerts: e.target.checked });
+  });
+  document.getElementById("push_service").addEventListener("change", function(e){
+    syncSubs(); save({ push_service: e.target.value });
+  });
+  ["ntfy_topic","pushover_token","pushover_user"].forEach(function(id){
+    document.getElementById(id).addEventListener("change", function(e){
+      var p = {}; p[id] = e.target.value.trim(); save(p);
+    });
+  });
+  load();
+</script>
+</body></html>"""
+
+
 def make_handler(state, demo):
     class Handler(BaseHTTPRequestHandler):
         server_version = "ClaudeTrackerPi/1.0"
@@ -418,6 +789,18 @@ def make_handler(state, demo):
                 return
             if path == "/wifi":
                 self._send_html(WIFI_PAGE)
+                return
+            if path == "/settings":
+                self._send_html(SETTINGS_PAGE)
+                return
+            if path == "/api/settings":
+                out = {}
+                for k in SETTINGS_FIELDS:
+                    v = state.config.get(k)
+                    if k in SECRET_FIELDS and v:
+                        v = SECRET_MASK          # don't leak saved secrets
+                    out[k] = v
+                self._send_json(out)
                 return
             if path == "/api/wifi/networks":
                 if demo:
@@ -448,6 +831,20 @@ def make_handler(state, demo):
             path = self.path.split("?", 1)[0]
             if path == "/api/push":
                 self._handle_push()
+                return
+            if path == "/api/settings":
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                raw = self.rfile.read(length) if length else b"{}"
+                try:
+                    payload = json.loads(raw.decode("utf-8") or "{}")
+                    applied = apply_settings(state, payload)
+                    self._send_json({"ok": True, "applied": applied})
+                except ValueError as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, code=400)
+                return
+            if path == "/api/test-alert":
+                result = notify.send_test(state.config)
+                self._send_json({"ok": True, **result})
                 return
             if path == "/api/wifi/join":
                 length = int(self.headers.get("Content-Length", 0) or 0)
