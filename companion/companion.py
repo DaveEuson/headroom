@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 """ClaudeTracker companion — runs on the computer where you use Claude Code.
 
-Anthropic blocks third-party tools from its OAuth/usage endpoints, so the Pi
-can't ask Anthropic directly. Instead, this little script reads Claude Code's
-own local session logs on your machine (~/.claude/projects/**/*.jsonl — files
-Claude Code writes itself, no network, no login), works out how much you've
-used in the current 5-hour block and the last 7 days, and POSTs that to your
-Pi every couple of minutes. The Pi just displays it.
+Reads the *real* Claude subscription usage numbers and pushes them to the Pi.
 
-Standard library only. Run it with Python 3.8+:
+How (and why it works when a fresh sign-in doesn't): it never signs in. It
+reuses Claude Code's own existing login — the credentials Claude Code already
+saved on this machine — refreshes that token if needed, and reads Anthropic's
+usage endpoint. It never touches the authorization-code sign-in exchange, which
+is the throttled one. (Same approach as the Sparko "Fuel" widget.)
 
-    python3 companion.py --pi http://claudecounter.local:8080
+    Credentials:  macOS Keychain item "Claude Code-credentials", else
+                  ~/.claude/.credentials.json  (Windows/Linux)
+    Refresh:      POST https://platform.claude.com/v1/oauth/token (refresh_token)
+    Usage:        GET  https://api.anthropic.com/api/oauth/usage
 
-Options (or set in companion.config.json next to this file):
-    --pi URL        your Pi's dashboard address (required)
-    --token SECRET  must match "push_token" in the Pi's config.json (optional)
-    --once          compute and push a single time, then exit (for testing)
+If it can't read credentials (Claude Code not logged in here), it falls back to
+estimating usage from Claude Code's local logs.
 
-Because Anthropic doesn't publish exact token limits, the percentages are
-measured against the budgets in DEFAULT_LIMITS below — tune them to your plan.
-The reset countdowns and "how much you've used" are read straight from the
-logs and are accurate.
+Run it:  python3 companion.py --pi http://claudecounter.local:8080
+Standard library only, Python 3.8+.
 """
 
 import argparse
@@ -28,46 +26,212 @@ import datetime
 import glob
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 
-# Rough token budgets per window. Anthropic doesn't publish real numbers, so
-# treat these as dials — raise/lower until the meters feel right for your plan.
-DEFAULT_LIMITS = {
-    "five_hour": 220_000_000,     # 5-hour session block
-    "seven_day": 1_500_000_000,   # weekly, all models
-    "seven_day_opus": 300_000_000,  # weekly, Opus only
+CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+OAUTH_BETA = "oauth-2025-04-20"
+USER_AGENT = "ClaudeTrackerPi-Companion/1.0"
+KEYCHAIN_SERVICE = "Claude Code-credentials"
+REFRESH_MARGIN = 300  # refresh if the token expires within 5 minutes
+
+WINDOW_LABELS = {
+    "five_hour": "Session (5 hour)",
+    "seven_day": "Weekly (all models)",
+    "seven_day_sonnet": "Weekly (Sonnet)",
+    "seven_day_opus": "Weekly (Opus)",
+    "seven_day_oauth_apps": "Weekly (connected apps)",
+    "extra_usage": "Extra usage",
 }
 
-FIVE_HOURS = 5 * 3600
-SEVEN_DAYS = 7 * 86400
+# Fallback-only: rough token budgets if we must estimate from logs.
+DEFAULT_LIMITS = {
+    "five_hour": 220_000_000,
+    "seven_day": 1_500_000_000,
+    "seven_day_opus": 300_000_000,
+}
+FIVE_HOURS, SEVEN_DAYS = 5 * 3600, 7 * 86400
 
 
-def claude_projects_dir():
-    return os.path.join(os.path.expanduser("~"), ".claude", "projects")
+# ----------------------------------------------------- credentials (like Sparko)
+
+def _creds_file():
+    return os.path.join(os.path.expanduser("~"), ".claude", ".credentials.json")
 
 
-def _parse_ts(value):
-    if not value:
+def read_creds():
+    """Return (creds, save_fn) or (None, None). creds has accessToken/
+    refreshToken/expiresAt(ms). save_fn persists an updated oauth dict."""
+    # macOS Keychain
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(
+                ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+                capture_output=True, text=True, timeout=5)
+            if out.returncode == 0 and out.stdout.strip():
+                creds = _parse_creds(out.stdout)
+                if creds:
+                    def save(oauth):
+                        blob = json.dumps({"claudeAiOauth": oauth})
+                        subprocess.run(
+                            ["security", "add-generic-password", "-U",
+                             "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_SERVICE,
+                             "-w", blob], capture_output=True, timeout=5)
+                    return creds, save
+        except (OSError, subprocess.SubprocessError):
+            pass
+    # file (Windows / Linux)
+    path = _creds_file()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            creds = _parse_creds(fh.read())
+        if creds:
+            def save(oauth):
+                data = {"claudeAiOauth": oauth}
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh)
+                os.replace(tmp, path)
+            return creds, save
+    except OSError:
+        pass
+    return None, None
+
+
+def _parse_creds(raw):
+    try:
+        j = json.loads(raw)
+    except ValueError:
+        return None
+    o = j.get("claudeAiOauth") if isinstance(j, dict) else None
+    o = o or j
+    access = o.get("accessToken") or o.get("access_token")
+    if not access:
+        return None
+    expires = o.get("expiresAt") or o.get("expires_at") or 0
+    return {
+        "accessToken": access,
+        "refreshToken": o.get("refreshToken") or o.get("refresh_token"),
+        "expiresAt": int(expires),  # epoch ms
+        "subscriptionType": o.get("subscriptionType"),
+        "_raw": o,
+    }
+
+
+def valid_token(creds, save_fn):
+    """Return a usable access token, refreshing only if expired. None on fail."""
+    exp_s = creds["expiresAt"] / 1000.0 if creds["expiresAt"] else 0
+    if exp_s and exp_s - REFRESH_MARGIN > time.time():
+        return creds["accessToken"]            # still fresh — pure read
+    if not creds["refreshToken"]:
+        return creds["accessToken"] if not exp_s else None
+    # Rotating refresh tokens: only refresh if we can write the new one back,
+    # so we never leave Claude Code with a dead token.
+    try:
+        body = json.dumps({"grant_type": "refresh_token",
+                           "refresh_token": creds["refreshToken"],
+                           "client_id": CLIENT_ID}).encode("utf-8")
+        req = urllib.request.Request(
+            REFRESH_URL, data=body,
+            headers={"Content-Type": "application/json",
+                     "User-Agent": USER_AGENT}, method="POST")
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"token refresh failed ({exc}); Claude Code can refresh it by "
+              "running any command.", file=sys.stderr)
+        return None
+    oauth = dict(creds["_raw"])
+    oauth["accessToken"] = result["access_token"]
+    if result.get("refresh_token"):
+        oauth["refreshToken"] = result["refresh_token"]
+    if result.get("expires_in"):
+        oauth["expiresAt"] = int((time.time() + result["expires_in"]) * 1000)
+    try:
+        save_fn(oauth)
+    except Exception as exc:  # noqa: BLE001 - don't lose the token on write fail
+        print(f"warning: refreshed but couldn't save back ({exc})",
+              file=sys.stderr)
+    return oauth["accessToken"]
+
+
+def fetch_usage(token):
+    req = urllib.request.Request(
+        USAGE_URL,
+        headers={"Authorization": f"Bearer {token}",
+                 "anthropic-beta": OAUTH_BETA,
+                 "Accept": "application/json",
+                 "User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def windows_from_usage(raw):
+    order = list(WINDOW_LABELS)
+    out = []
+    for key, value in (raw or {}).items():
+        if not isinstance(value, dict):
+            continue
+        util = value.get("utilization")
+        if util is None:
+            continue
+        try:
+            util = max(0.0, min(100.0, float(util)))
+        except (TypeError, ValueError):
+            continue
+        out.append({
+            "key": key,
+            "label": WINDOW_LABELS.get(key, key.replace("_", " ").title()),
+            "utilization": round(util, 1),
+            "resets_at": value.get("resets_at") or value.get("resetsAt"),
+        })
+    out.sort(key=lambda w: order.index(w["key"]) if w["key"] in order else 99)
+    return out
+
+
+def get_live_windows():
+    """Real usage via Claude Code's login. Returns (windows, plan) or None."""
+    creds, save_fn = read_creds()
+    if not creds:
+        return None
+    token = valid_token(creds, save_fn)
+    if not token:
         return None
     try:
+        raw = fetch_usage(token)
+    except urllib.error.HTTPError as exc:
+        print(f"usage endpoint returned HTTP {exc.code}", file=sys.stderr)
+        return None
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"couldn't read usage: {exc}", file=sys.stderr)
+        return None
+    windows = windows_from_usage(raw)
+    if not windows:
+        return None
+    return windows, creds.get("subscriptionType")
+
+
+# ------------------------------------------------- fallback: estimate from logs
+
+def _parse_ts(value):
+    try:
         return datetime.datetime.fromisoformat(
-            str(value).replace("Z", "+00:00")
-        ).timestamp()
+            str(value).replace("Z", "+00:00")).timestamp()
     except (ValueError, TypeError):
         return None
 
 
 def read_events(root):
-    """Yield (timestamp, model, tokens) from every assistant message on disk."""
     for path in glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True):
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
                 for line in fh:
-                    line = line.strip()
-                    if not line or '"usage"' not in line:
+                    if '"usage"' not in line:
                         continue
                     try:
                         entry = json.loads(line)
@@ -75,93 +239,60 @@ def read_events(root):
                         continue
                     msg = entry.get("message") or {}
                     usage = msg.get("usage") or {}
-                    if not usage:
-                        continue
                     ts = _parse_ts(entry.get("timestamp"))
-                    if ts is None:
+                    if not usage or ts is None:
                         continue
-                    tokens = (
-                        (usage.get("input_tokens") or 0)
-                        + (usage.get("output_tokens") or 0)
-                        + (usage.get("cache_creation_input_tokens") or 0)
-                        + (usage.get("cache_read_input_tokens") or 0)
-                    )
-                    model = (msg.get("model") or entry.get("model") or "").lower()
+                    tokens = sum(usage.get(k, 0) or 0 for k in (
+                        "input_tokens", "output_tokens",
+                        "cache_creation_input_tokens", "cache_read_input_tokens"))
+                    model = (msg.get("model") or "").lower()
                     yield ts, model, tokens
         except OSError:
             continue
 
 
-def _window(events, seconds, now):
-    """Sum tokens within the last `seconds`; return (tokens, oldest_ts)."""
-    cutoff = now - seconds
-    total = 0
-    oldest = None
-    for ts, _model, tokens in events:
-        if ts >= cutoff:
-            total += tokens
-            oldest = ts if oldest is None else min(oldest, ts)
-    return total, oldest
+def get_log_windows(limits):
+    root = os.path.join(os.path.expanduser("~"), ".claude", "projects")
+    if not os.path.isdir(root):
+        return None
+    events = list(read_events(root))
+    now = time.time()
 
+    def win(seconds, key, label, subset=None):
+        cutoff, total, oldest = now - seconds, 0, None
+        for ts, model, tok in events:
+            if ts >= cutoff and (subset is None or subset in model):
+                total += tok
+                oldest = ts if oldest is None else min(oldest, ts)
+        iso = (datetime.datetime.fromtimestamp(oldest + seconds,
+               datetime.timezone.utc).isoformat() if oldest else None)
+        return {"key": key, "label": label,
+                "utilization": round(min(100.0, 100.0 * total / max(1, limits[key])), 1),
+                "resets_at": iso}
 
-def compute_windows(events, limits, now=None):
-    now = now or time.time()
-    events = list(events)
-
-    def window(seconds, subset=None):
-        subset_events = (
-            events if subset is None
-            else [e for e in events if subset in e[1]]
-        )
-        return _window(subset_events, seconds, now)
-
-    def iso(ts):
-        return datetime.datetime.fromtimestamp(
-            ts, datetime.timezone.utc).isoformat()
-
-    windows = []
-
-    tok, oldest = window(FIVE_HOURS)
-    windows.append({
-        "key": "five_hour", "label": "Session (5 hour)",
-        "utilization": 100.0 * tok / max(1, limits["five_hour"]),
-        "resets_at": iso(oldest + FIVE_HOURS) if oldest else None,
-    })
-
-    tok, oldest = window(SEVEN_DAYS)
-    windows.append({
-        "key": "seven_day", "label": "Weekly (all models)",
-        "utilization": 100.0 * tok / max(1, limits["seven_day"]),
-        "resets_at": iso(oldest + SEVEN_DAYS) if oldest else None,
-    })
-
-    tok, oldest = window(SEVEN_DAYS, subset="opus")
-    if tok:
-        windows.append({
-            "key": "seven_day_opus", "label": "Weekly (Opus)",
-            "utilization": 100.0 * tok / max(1, limits["seven_day_opus"]),
-            "resets_at": iso(oldest + SEVEN_DAYS) if oldest else None,
-        })
-
-    for w in windows:
-        w["utilization"] = round(min(100.0, w["utilization"]), 1)
+    windows = [win(FIVE_HOURS, "five_hour", "Session (5 hour)"),
+               win(SEVEN_DAYS, "seven_day", "Weekly (all models)")]
+    opus = win(SEVEN_DAYS, "seven_day_opus", "Weekly (Opus)", subset="opus")
+    if opus["utilization"] > 0:
+        windows.append(opus)
     return windows
 
+
+# ------------------------------------------------------------------- push loop
 
 def push(pi_url, token, payload):
     body = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:
         headers["X-Push-Token"] = token
-    req = urllib.request.Request(
-        pi_url.rstrip("/") + "/api/push", data=body, headers=headers,
-        method="POST")
+    req = urllib.request.Request(pi_url.rstrip("/") + "/api/push",
+                                 data=body, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
 def load_config():
-    cfg = {"pi": None, "token": "", "interval": 120, "plan": None,
+    cfg = {"pi": None, "token": "", "interval": 120,
            "limits": dict(DEFAULT_LIMITS)}
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "companion.config.json")
@@ -169,7 +300,7 @@ def load_config():
         try:
             with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
-            cfg.update({k: data[k] for k in cfg if k in data})
+            cfg.update({k: data[k] for k in ("pi", "token", "interval") if k in data})
             if isinstance(data.get("limits"), dict):
                 cfg["limits"].update(data["limits"])
         except (OSError, ValueError) as exc:
@@ -177,18 +308,19 @@ def load_config():
     return cfg
 
 
-def run_once(cfg, last_total=[0]):
-    root = claude_projects_dir()
-    if not os.path.isdir(root):
-        print(f"Claude Code logs not found at {root}. Is Claude Code installed "
-              "and used on this machine?", file=sys.stderr)
-        return False
-    events = list(read_events(root))
-    windows = compute_windows(events, cfg["limits"])
-    total = sum(t for _ts, _m, t in events)
-    payload = {"windows": windows, "plan": cfg.get("plan"),
-               "active": total > last_total[0]}
-    last_total[0] = total
+def run_once(cfg):
+    live = get_live_windows()
+    if live:
+        windows, plan = live
+        source = "live"
+    else:
+        windows = get_log_windows(cfg["limits"])
+        plan, source = None, "estimated"
+        if not windows:
+            print("No Claude Code login or logs found on this machine. Is "
+                  "Claude Code installed and signed in here?", file=sys.stderr)
+            return False
+    payload = {"windows": windows, "plan": plan, "source": source}
     try:
         result = push(cfg["pi"], cfg["token"], payload)
     except (urllib.error.URLError, OSError) as exc:
@@ -197,9 +329,10 @@ def run_once(cfg, last_total=[0]):
     if not result.get("ok"):
         print(f"Pi rejected the push: {result.get('error')}", file=sys.stderr)
         return False
-    top = ", ".join(f"{w['label'].split(' (')[0]} {w['utilization']}%"
-                    for w in windows)
-    print(f"pushed: {top}")
+    tag = "LIVE" if source == "live" else "estimated"
+    summary = ", ".join(f"{w['label'].split(' (')[0]} {w['utilization']}%"
+                        for w in windows)
+    print(f"pushed [{tag}]: {summary}")
     return True
 
 
@@ -213,13 +346,11 @@ def main():
     ap.add_argument("--once", action="store_true")
     args = ap.parse_args()
     cfg["pi"], cfg["token"], cfg["interval"] = args.pi, args.token, args.interval
-
     if not cfg["pi"]:
         ap.error("no Pi address. Pass --pi http://<pi>:8080 or set it in "
                  "companion.config.json")
 
-    print(f"ClaudeTracker companion -> {cfg['pi']} "
-          f"(every {cfg['interval']}s). Reading {claude_projects_dir()}")
+    print(f"ClaudeTracker companion -> {cfg['pi']} (every {cfg['interval']}s)")
     if args.once:
         sys.exit(0 if run_once(cfg) else 1)
     while True:

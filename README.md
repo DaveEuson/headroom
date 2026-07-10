@@ -24,8 +24,9 @@ used right now — no terminal, no menubar, no estimating.
   right on the PiSugar Whisplay's 1.69″ LCD (240×280, ST7789), no browser
   or desktop needed on the Pi
 - **Companion feed** — a tiny script on the computer where you use Claude Code
-  reads its local logs and pushes your usage to the Pi (Anthropic blocks
-  third-party apps from its own APIs, so this stays fully within the rules)
+  reuses its existing login to read your **real** usage numbers (same ones
+  `claude /usage` shows) and pushes them to the Pi — no sign-in, so it never
+  hits the throttle that blocks fresh third-party logins
 - **Wi-Fi setup hotspot** — plug it in somewhere new and it can't find a
   network? It becomes its own Wi-Fi (`ClaudeTracker-Setup`) and shows a
   scan-to-join QR; a setup page pops up on your phone where you pick your
@@ -61,11 +62,10 @@ installer prints your dashboard URL, e.g. `http://raspberrypi.local:8080`.
 
 ### 2. Run the companion on your computer
 
-Anthropic blocks third-party tools from its sign-in/usage APIs, so the Pi
-can't ask Anthropic directly. Instead, a tiny **companion script** runs on the
-computer where you use Claude Code, reads Claude Code's own local logs
-(`~/.claude/projects`), and pushes your usage to the Pi. No login, nothing
-against Anthropic's rules.
+The Pi can't sign in directly (Anthropic throttles fresh third-party logins).
+Instead, a tiny **companion script** runs on the computer where you already use
+Claude Code, reuses that existing login to read your real usage numbers, and
+pushes them to the Pi. No new sign-in, so it never hits the throttle.
 
 On that computer (needs Python 3):
 

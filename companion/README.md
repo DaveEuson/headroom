@@ -5,13 +5,17 @@ Pi.
 
 ## Why this exists
 
-Anthropic blocks third-party tools from its sign-in and usage endpoints (the
-policy change that landed in early 2026), so the Pi can't ask Anthropic
-directly. Instead, this small script reads Claude Code's **own local session
-logs** on your machine — the `~/.claude/projects/**/*.jsonl` files Claude Code
-writes itself — figures out how much you've used in the current 5-hour block
-and the last 7 days, and sends that to your Pi every couple of minutes. No
-login, no network calls to Anthropic, nothing against the rules.
+The Pi can't sign in to Anthropic directly — the fresh OAuth sign-in endpoint
+is heavily throttled for anything that isn't Claude Code itself. So instead of
+signing in, this script **reuses Claude Code's login that's already on your
+computer**: it reads the token Claude Code saved, refreshes it if needed, and
+reads Anthropic's real usage endpoint — the exact numbers Claude Code's own
+`/usage` shows. It then pushes those to the Pi every couple of minutes. It
+never does a sign-in, so it never hits the throttle. (Same technique the
+Sparko "Fuel" widget uses.)
+
+If Claude Code isn't logged in on this machine, it falls back to *estimating*
+usage from Claude Code's local logs (`~/.claude/projects`).
 
 ## Setup
 
@@ -57,13 +61,18 @@ Copy `companion.config.example.json` to `companion.config.json` next to
 
 ## About the percentages
 
-The **reset countdowns and how much you've used** are read straight from Claude
-Code's logs and are accurate. The **percentages** are measured against the
-token budgets in `limits`, because Anthropic doesn't publish the real per-window
-caps. Treat those numbers as dials: if a meter reads high or low compared to
-what Claude Code's own `/usage` shows, nudge the matching `limits` value until
-it lines up. The trend, the reset timing, and the Opus-vs-all split are all
-real either way.
+When Claude Code is logged in on this machine (the normal case), the numbers
+are **the real thing** — Anthropic's own utilization windows, identical to what
+`claude /usage` shows. The companion prints `pushed [LIVE]: …` when it's using
+them.
+
+Only if it *can't* read a Claude Code login does it fall back to *estimating*
+from local logs (`pushed [estimated]: …`). In that mode the percentages are
+measured against the token budgets in `limits`, which you can tune — the reset
+timing and usage amounts are still accurate, just the % is a guess.
+
+**Requires Claude Code signed in on this computer** for live numbers. If Sparko's
+"Fuel" widget works for you, you already have this.
 
 ## Security
 
