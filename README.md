@@ -85,8 +85,9 @@ power-on to live meters is about five minutes:
 | [Solderless GPIO hammer header](https://www.amazon.com/dp/B0CGRYYY63?tag=daveeuson01-20) **·** or a [soldering kit](https://www.amazon.com/dp/B087767KNW?tag=daveeuson01-20) | The Whisplay HAT needs a 40‑pin header on the Pi. The press‑on "hammer" header adds it with no soldering; or solder your own. Skip if your Pi already has a header. |
 | [PiSugar Whisplay HAT](https://www.amazon.com/dp/B0FPG8S6K6?tag=daveeuson01-20) | The 1.69″ LCD board that sits on top. (Add a PiSugar battery separately if yours doesn't include one.) |
 | [microSD card](https://www.amazon.com/dp/B08L5HMJVW?tag=daveeuson01-20) | 16–32 GB is plenty. Flash it with Raspberry Pi OS Lite. |
+| [3D‑printed case](https://www.printables.com/model/1692376-ground-zero-raspberry-pi-zero-2w-whisplay-case-v1) | Optional. The "Ground Zero" enclosure, designed for the Pi Zero 2 W + Whisplay. Free STL — print it yourself or use a printing service. |
 
-*As an Amazon Associate I earn from qualifying purchases.*
+*As an Amazon Associate I earn from qualifying purchases. The 3D‑print model is a free third‑party design.*
 
 ### 1. On the Pi
 
