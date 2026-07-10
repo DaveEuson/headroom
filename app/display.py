@@ -332,7 +332,8 @@ def _draw_pip(draw, mood, frame, theme):
 
 
 _SETUP_HINTS = ("credential", "sign-in", "sign in", "log in", "login",
-                "access token", "re-copy", "not logged in", "not connected")
+                "access token", "re-copy", "not logged in", "not connected",
+                "companion", "waiting for")
 
 WIFI_STATE_FILE = "/run/claude-tracker/wifi.json"
 
@@ -444,25 +445,26 @@ def _render_wifi_setup(theme, fonts, wifi):
 
 
 def _render_setup(theme, fonts, url):
-    """First-run screen: a QR code that opens the dashboard on a phone."""
+    """First-run screen: how to connect your Claude account from your computer."""
     from PIL import Image, ImageDraw
 
     img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
     draw = ImageDraw.Draw(img)
-    _center(draw, "Set me up", 14, fonts["clock"], theme["ink"])
-    _center(draw, "Scan with your phone", 54, fonts["label"], theme["muted"])
-    qr = _qr_image(url, 150) if url else None
-    if qr:
-        img.paste(qr, ((WIDTH - qr.width) // 2, 78))
-        yb = 78 + qr.height + 8
-    else:
-        yb = 150
-    if url:
-        _center(draw, url.replace("http://", ""), yb, fonts["small"],
-                theme["ink"])
-    else:
-        _center(draw, "connect the Pi to Wi-Fi first", yb, fonts["small"],
+    _center(draw, "Almost there", 12, fonts["clock"], theme["ink"])
+    if not url:
+        _center(draw, "connect the Pi to Wi-Fi first", 120, fonts["label"],
                 theme["muted"])
+        return img
+    _center(draw, "On your computer, open:", 48, fonts["small"], theme["muted"])
+    _center(draw, url.replace("http://", ""), 64, fonts["label"],
+            theme["accent"])
+    qr = _qr_image(url, 128)
+    if qr:
+        img.paste(qr, ((WIDTH - qr.width) // 2, 92))
+        yb = 92 + qr.height + 8
+    else:
+        yb = 230
+    _center(draw, "or scan this code", yb, fonts["small"], theme["muted"])
     return img
 
 

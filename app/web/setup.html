@@ -46,12 +46,24 @@
   a.back { display:inline-block; margin-top:22px; color:var(--accent);
     text-decoration:none; font-weight:600; }
   h2 { font-size:1.05rem; margin:0 0 2px; }
+  .banner { background:rgba(217,119,87,.12);
+    border:1px solid rgba(217,119,87,.4); border-radius:14px;
+    padding:14px 16px; margin-top:16px; font-size:.95rem; }
+  .banner b { color:var(--accent); }
+  .banner code { display:inline-block; margin-top:6px; font-size:1rem;
+    font-weight:700; word-break:break-all; }
 </style>
 </head><body>
 <div class="wrap">
   <h1>Set up your Claude Tracker</h1>
   <p class="muted">One small app on the computer where you use Claude Code keeps
     this tracker fed with your real usage. Install it once and forget it.</p>
+
+  <div class="banner" id="mobileNote" hidden>
+    <b>Open this on your computer.</b> The companion runs on the machine where
+    you use Claude Code — not your phone. On that computer, open:
+    <code id="thisUrl"></code>
+  </div>
 
   <div class="card">
     <h2>1 · Download the companion</h2>
@@ -95,12 +107,21 @@
     { id:"macos",   label:"macOS",   file:"ClaudeTrackerCompanion-macos",       hint:"Apple Silicon & Intel" },
     { id:"linux",   label:"Linux",   file:"ClaudeTrackerCompanion-linux",       hint:"x86-64 binary" }
   ];
+  function isMobile() {
+    return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || "");
+  }
   function detectOS() {
+    if (isMobile()) return null;   // the app is for a computer, not a phone
     var p = (navigator.platform || "") + " " + (navigator.userAgent || "");
     if (/Win/i.test(p)) return "windows";
-    if (/Mac|iPhone|iPad|iPod/i.test(p)) return "macos";
-    if (/Linux|Android|X11/i.test(p)) return "linux";
+    if (/Mac/i.test(p)) return "macos";
+    if (/Linux|X11/i.test(p)) return "linux";
     return null;
+  }
+  if (isMobile()) {
+    var note = document.getElementById("mobileNote");
+    document.getElementById("thisUrl").textContent = location.host + "/setup";
+    note.hidden = false;
   }
   var mine = detectOS();
   var box = document.getElementById("downloads");
