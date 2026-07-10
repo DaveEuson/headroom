@@ -23,10 +23,9 @@ used right now — no terminal, no menubar, no estimating.
 - **Whisplay HAT support** — draws a compact version of the dashboard
   right on the PiSugar Whisplay's 1.69″ LCD (240×280, ST7789), no browser
   or desktop needed on the Pi
-- **QR-code setup + phone sign-in** — until it has your Claude login, the HAT
-  screen shows a "Set me up" QR code; scan it, tap **Sign in with Claude**, and
-  authenticate right on your phone (OAuth, the same login Claude Code uses) —
-  no computer, no scripts, no files to copy
+- **Companion feed** — a tiny script on the computer where you use Claude Code
+  reads its local logs and pushes your usage to the Pi (Anthropic blocks
+  third-party apps from its own APIs, so this stays fully within the rules)
 - **Wi-Fi setup hotspot** — plug it in somewhere new and it can't find a
   network? It becomes its own Wi-Fi (`ClaudeTracker-Setup`) and shows a
   scan-to-join QR; a setup page pops up on your phone where you pick your
@@ -60,30 +59,30 @@ cd ClaudeTrackerPi
 That creates a `claude-tracker` systemd service that starts on boot. The
 installer prints your dashboard URL, e.g. `http://raspberrypi.local:8080`.
 
-### 2. Sign in from your phone
+### 2. Run the companion on your computer
 
-Open the dashboard (the HAT screen shows a QR code, or go to the URL the
-installer printed) and tap **Sign in with Claude**. That opens claude.ai;
-approve, copy the code it shows you, paste it back into the dashboard, and
-you're connected. No computer, no scripts, no files to copy.
+Anthropic blocks third-party tools from its sign-in/usage APIs, so the Pi
+can't ask Anthropic directly. Instead, a tiny **companion script** runs on the
+computer where you use Claude Code, reads Claude Code's own local logs
+(`~/.claude/projects`), and pushes your usage to the Pi. No login, nothing
+against Anthropic's rules.
 
-That's it — the meters go live immediately. The tracker refreshes its token
-automatically from then on, so this is a one-time step. If the sign-in ever
-expires, the dashboard shows the button again.
+On that computer (needs Python 3):
 
-### Moving it to a new network?
+```bash
+python3 companion/companion.py --pi http://claudecounter.local:8080
+```
+
+Leave it running and the meters go live. Full details, auto-start on
+boot, and how to tune the limits: **[companion/README.md](companion/README.md)**.
+
+### Moving the Pi to a new network?
 
 If the Pi boots and can't find a known Wi-Fi network for ~45 seconds, the
 screen switches to **Wi-Fi setup**: scan the QR to join its
 `ClaudeTracker-Setup` hotspot, and a page opens on your phone to pick your
-network and enter the password. Once it hops over, the normal setup/dashboard
-takes over. (Requires NetworkManager — standard on Raspberry Pi OS.)
-
-> **Prefer to reuse an existing Claude Code login?** Two shortcuts:
-> - Already run Claude Code *on the Pi itself*? The tracker auto-detects
->   `~/.claude/.credentials.json` — nothing to do.
-> - On a Mac/Linux box with Claude Code logged in? You can copy its
->   credentials over instead: `./scripts/send-credentials.sh pi@raspberrypi.local`
+network and enter the password. Once it hops over, the dashboard takes over.
+(Requires NetworkManager — standard on Raspberry Pi OS.)
 
 ## Try it without a Pi
 

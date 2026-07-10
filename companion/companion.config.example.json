@@ -1,0 +1,11 @@
+{
+  "pi": "http://claudecounter.local:8080",
+  "token": "",
+  "interval": 120,
+  "plan": "max",
+  "limits": {
+    "five_hour": 220000000,
+    "seven_day": 1500000000,
+    "seven_day_opus": 300000000
+  }
+}

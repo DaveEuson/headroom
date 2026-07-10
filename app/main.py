@@ -37,6 +37,11 @@ DEFAULT_CONFIG = {
     "night_start": "22:00",   # when the mascot goes to sleep
     "night_end": "07:00",     # and when it wakes up
     "hat_display": True,      # draw on the Whisplay HAT LCD when present
+    # "push" (default): a companion app on your computer computes usage from
+    # Claude Code's local logs and POSTs it here. "oauth": legacy direct-to-
+    # Anthropic path (no longer works -- Anthropic blocks third-party OAuth).
+    "data_source": "push",
+    "push_token": "",         # optional shared secret the companion must send
 }
 
 # How long after the last observed usage increase we still call the
@@ -137,6 +142,20 @@ def demo_snapshot():
 def start_pollers(state, config):
     creds_configured = config.get("credentials_path")
 
+    def wait_for_push():
+        # In push mode the companion app feeds us data via POST /api/push; we
+        # just show a helpful hint until the first push lands.
+        while True:
+            with state.lock:
+                stale = (state.usage_updated is None
+                         or time.time() - state.usage_updated > 600)
+                if stale:
+                    state.usage_error = (
+                        "Waiting for the ClaudeTracker companion on your "
+                        "computer. See the setup guide to start it."
+                    )
+            time.sleep(15)
+
     def poll_usage():
         while True:
             path = anthropic_usage.find_credentials_path(creds_configured)
@@ -200,7 +219,9 @@ def start_pollers(state, config):
                 state.wifi = {"ssid": ssid}
             time.sleep(15)
 
-    for target in (poll_usage, poll_battery, poll_wifi):
+    usage_worker = poll_usage if config.get("data_source") == "oauth" \
+        else wait_for_push
+    for target in (usage_worker, poll_battery, poll_wifi):
         threading.Thread(target=target, daemon=True).start()
 
 
@@ -245,6 +266,43 @@ def complete_login(state, code, verifier=None):
         with state.lock:
             state.usage_error = str(exc)
         return None
+
+
+def apply_push(state, config, payload):
+    """Store usage pushed by the companion app. Returns None or raises ValueError.
+
+    payload = {"windows": [{"key","label","utilization","resets_at"}, ...],
+               "plan": str|None, "active": bool (optional)}
+    """
+    windows = payload.get("windows")
+    if not isinstance(windows, list):
+        raise ValueError("missing 'windows' list")
+    clean = []
+    for w in windows:
+        if not isinstance(w, dict) or "utilization" not in w:
+            continue
+        try:
+            util = max(0.0, min(100.0, float(w["utilization"])))
+        except (TypeError, ValueError):
+            continue
+        clean.append({
+            "key": str(w.get("key", "")),
+            "label": str(w.get("label", w.get("key", "Usage"))),
+            "utilization": util,
+            "resets_at": w.get("resets_at"),
+        })
+    now_util = {w["key"]: w["utilization"] for w in clean}
+    with state.lock:
+        prev = state.prev_utilization
+        went_up = prev is not None and any(
+            prev.get(k) is None or v > prev[k] + 0.01 for k, v in now_util.items()
+        )
+        if payload.get("active") or went_up:
+            state.last_activity = time.time()
+        state.prev_utilization = now_util
+        state.usage = {"windows": clean, "plan": payload.get("plan")}
+        state.usage_error = None
+        state.usage_updated = time.time()
 
 
 def complete_paste(state, text):
@@ -603,6 +661,9 @@ def make_handler(state, demo):
             if path == "/api/paste-creds":
                 self._handle_paste()
                 return
+            if path == "/api/push":
+                self._handle_push()
+                return
             if path == "/api/wifi/join":
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 raw = self.rfile.read(length) if length else b"{}"
@@ -664,6 +725,22 @@ def make_handler(state, demo):
                 self._send_json({"ok": False,
                                  "error": f"Unexpected error: {exc}"})
 
+        def _handle_push(self):
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            token = state.config.get("push_token") or ""
+            if token and self.headers.get("X-Push-Token") != token:
+                self._send_json({"ok": False, "error": "bad push token"}, code=403)
+                return
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+                apply_push(state, state.config, payload)
+                self._send_json({"ok": True})
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, code=400)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"error: {exc}"}, code=500)
+
         def _handle_paste(self):
             length = int(self.headers.get("Content-Length", 0) or 0)
             raw = self.rfile.read(length) if length else b"{}"
@@ -684,9 +761,9 @@ def make_handler(state, demo):
                 self._send_json({"ok": False,
                                  "error": f"Unexpected error: {exc}"})
 
-        def _send_json(self, payload):
+        def _send_json(self, payload, code=200):
             body = json.dumps(payload).encode("utf-8")
-            self.send_response(200)
+            self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
