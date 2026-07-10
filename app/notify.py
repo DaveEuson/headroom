@@ -19,7 +19,35 @@ MESSAGES = {
             "You're out of session usage — it will reset soon."),
     "restored": ("Claude usage restored",
                  "Your Claude session has reset — you're good to go."),
+    "test": ("ClaudeTracker test alert",
+             "Alerts are working — you'll be pinged when you run out or "
+             "recover."),
 }
+
+
+def send_test(config):
+    """Fire a test alert now and report what happened, so a user can verify
+    their setup. Push runs synchronously so we can surface success/failure."""
+    result = {}
+    if config.get("audio_alerts"):
+        try:
+            threading.Thread(target=_play_tone, args=("test",),
+                             daemon=True).start()
+            result["audio"] = "playing"
+        except Exception as exc:
+            result["audio"] = f"failed: {exc}"
+    else:
+        result["audio"] = "off"
+    service = (config.get("push_service") or "none").lower()
+    if service == "none":
+        result["push"] = "off"
+    else:
+        try:
+            _send_push(config, "test")
+            result["push"] = f"sent via {service}"
+        except Exception as exc:
+            result["push"] = f"{service} failed: {exc}"
+    return result
 
 
 def alert(config, event):

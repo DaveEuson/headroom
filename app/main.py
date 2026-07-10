@@ -153,6 +153,11 @@ def _clamp_brightness(v):
         return None
 
 
+# Semi-secret fields: masked in GET, and the mask is ignored on POST so
+# leaving the field untouched doesn't overwrite the saved value.
+SECRET_FIELDS = ("pushover_token", "pushover_user")
+SECRET_MASK = "••••••"
+
 SETTINGS_FIELDS = {
     "theme": lambda v: v if v in ("auto", "light", "dark") else None,
     "clock_24h": lambda v: bool(v),
@@ -175,6 +180,8 @@ def apply_settings(state, payload):
     for key, normalize in SETTINGS_FIELDS.items():
         if key not in payload:
             continue
+        if key in SECRET_FIELDS and payload[key] == SECRET_MASK:
+            continue          # unchanged mask -> keep the saved value
         value = normalize(payload[key])
         if value is None:
             raise ValueError(f"invalid value for {key!r}")
@@ -608,6 +615,10 @@ SETTINGS_PAGE = """<!DOCTYPE html>
     left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; }
   .sw input:checked + span { background:var(--accent); }
   .sw input:checked + span::before { transform:translateX(18px); }
+  .tbtn { font-size:.95rem; font-weight:600; padding:9px 15px; border-radius:9px;
+    flex:none; border:1px solid var(--accent); background:transparent;
+    color:var(--accent); cursor:pointer; }
+  .tbtn:disabled { opacity:.5; cursor:default; }
   .status { margin-top:14px; font-size:.9rem; min-height:1.2em; }
   .ok { color:#0f7b3f; } .err { color:#c4453d; }
   a.back { display:inline-block; margin-top:22px; color:var(--accent);
@@ -634,7 +645,8 @@ SETTINGS_PAGE = """<!DOCTYPE html>
     </div>
     <div class="row">
       <div class="lab">Brightness<small>Screen backlight (dims on HATs with PWM)</small></div>
-      <input type="range" id="brightness" min="10" max="100" step="5" style="flex:none;width:130px">
+      <span id="brightval" class="muted" style="min-width:40px;text-align:right">100%</span>
+      <input type="range" id="brightness" min="10" max="100" step="5" style="flex:none;width:110px">
     </div>
     <div class="row">
       <div class="lab">Dim at night<small>Lower the brightness during the night window</small></div>
@@ -670,6 +682,10 @@ SETTINGS_PAGE = """<!DOCTYPE html>
       <label>Pushover user key</label>
       <input type="text" id="pushover_user" placeholder="u1v2w3…" autocomplete="off">
     </div>
+    <div class="row" style="border-bottom:none">
+      <div class="lab">Test it<small>Fire a sample alert to check your setup</small></div>
+      <button id="testbtn" class="tbtn">Send test</button>
+    </div>
   </div>
 
   <div class="status" id="status"></div>
@@ -694,6 +710,7 @@ SETTINGS_PAGE = """<!DOCTYPE html>
       document.getElementById("theme").value = s.theme || "auto";
       document.getElementById("clock_24h").checked = !!s.clock_24h;
       document.getElementById("brightness").value = s.brightness || 100;
+      document.getElementById("brightval").textContent = (s.brightness || 100) + "%";
       document.getElementById("night_dim").checked = !!s.night_dim;
       document.getElementById("lcd_history").checked = !!s.lcd_history;
       document.getElementById("audio_alerts").checked = !!s.audio_alerts;
@@ -718,8 +735,22 @@ SETTINGS_PAGE = """<!DOCTYPE html>
   document.getElementById("clock_24h").addEventListener("change", function(e){
     save({ clock_24h: e.target.checked });
   });
+  document.getElementById("brightness").addEventListener("input", function(e){
+    document.getElementById("brightval").textContent = e.target.value + "%";
+  });
   document.getElementById("brightness").addEventListener("change", function(e){
     save({ brightness: parseInt(e.target.value, 10) });
+  });
+  document.getElementById("testbtn").addEventListener("click", async function(e){
+    var b = e.target; b.disabled = true;
+    status.className = "status"; status.textContent = "Sending test…";
+    try {
+      var d = await (await fetch("/api/test-alert", { method:"POST" })).json();
+      var ok = /sent|playing/.test(d.push + d.audio);
+      status.className = "status " + (ok ? "ok" : "err");
+      status.textContent = "Test — speaker: " + d.audio + " · phone: " + d.push;
+    } catch (err) { flash("Test failed to run.", false); }
+    b.disabled = false;
   });
   document.getElementById("night_dim").addEventListener("change", function(e){
     save({ night_dim: e.target.checked });
@@ -763,8 +794,13 @@ def make_handler(state, demo):
                 self._send_html(SETTINGS_PAGE)
                 return
             if path == "/api/settings":
-                self._send_json({k: state.config.get(k)
-                                 for k in SETTINGS_FIELDS})
+                out = {}
+                for k in SETTINGS_FIELDS:
+                    v = state.config.get(k)
+                    if k in SECRET_FIELDS and v:
+                        v = SECRET_MASK          # don't leak saved secrets
+                    out[k] = v
+                self._send_json(out)
                 return
             if path == "/api/wifi/networks":
                 if demo:
@@ -805,6 +841,10 @@ def make_handler(state, demo):
                     self._send_json({"ok": True, "applied": applied})
                 except ValueError as exc:
                     self._send_json({"ok": False, "error": str(exc)}, code=400)
+                return
+            if path == "/api/test-alert":
+                result = notify.send_test(state.config)
+                self._send_json({"ok": True, **result})
                 return
             if path == "/api/wifi/join":
                 length = int(self.headers.get("Content-Length", 0) or 0)
