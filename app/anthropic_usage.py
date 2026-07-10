@@ -98,14 +98,13 @@ def _save(path, data):
         raise
 
 
-def _post_form(url, payload):
-    # RFC 6749 token requests are form-encoded (matches Claude Code).
-    body = urllib.parse.urlencode(payload).encode("utf-8")
+def _post_json(url, payload):
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=body,
         headers={
-            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Type": "application/json",
             "Accept": "application/json",
             "User-Agent": USER_AGENT,
         },
@@ -123,7 +122,7 @@ def _refresh(path, data, oauth):
             "Copy fresh credentials to the Pi (see README)."
         )
     try:
-        result = _post_form(
+        result = _post_json(
             TOKEN_URL,
             {
                 "grant_type": "refresh_token",

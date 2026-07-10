@@ -247,6 +247,42 @@ def complete_login(state, code, verifier=None):
         return None
 
 
+def complete_paste(state, text):
+    """Save credentials pasted from an existing Claude Code login.
+
+    Accepts the whole ~/.claude/.credentials.json ({"claudeAiOauth": {...}})
+    or just the inner object. Bypasses the OAuth exchange entirely, so it
+    works even when the sign-in endpoint is rate-limited. Returns the plan.
+    """
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        raise oauth_login.LoginError("That isn't valid JSON. Paste the whole "
+                                     "contents of the credentials file.")
+    oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    if oauth is None and isinstance(data, dict) and data.get("accessToken"):
+        oauth = data
+    if not isinstance(oauth, dict) or not oauth.get("accessToken"):
+        raise oauth_login.LoginError("Couldn't find an access token in that "
+                                     "text. Copy the full credentials file.")
+    path = _creds_write_path(state.config)
+    oauth_login.save_credentials(oauth, path)
+    try:
+        usage = anthropic_usage.fetch_usage(path)
+        with state.lock:
+            state.usage = usage
+            state.usage_error = None
+            state.usage_updated = time.time()
+            state.prev_utilization = {
+                w["key"]: w["utilization"] for w in usage["windows"]
+            }
+        return (usage or {}).get("plan")
+    except anthropic_usage.UsageError as exc:
+        with state.lock:
+            state.usage_error = str(exc)
+        return None
+
+
 CONNECT_PAGE = """<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -308,11 +344,40 @@ CONNECT_PAGE = """<!DOCTYPE html>
     <div id="msg"></div>
   </div>
 
+  <details class="card" style="margin-top:14px">
+    <summary style="cursor:pointer;font-weight:600">Already use Claude Code? Paste its login instead</summary>
+    <p class="muted" style="margin:8px 0">This skips the sign-in above (handy if
+      it keeps failing). On a computer with Claude Code, open its credentials
+      file and paste the whole thing here:</p>
+    <p class="muted" style="margin:8px 0;font-size:.82rem">
+      macOS: Keychain item <b>Claude Code-credentials</b> ·
+      Linux/WSL: <b>~/.claude/.credentials.json</b> ·
+      Windows: <b>%USERPROFILE%\\.claude\\.credentials.json</b></p>
+    <textarea id="creds" rows="4" placeholder='{"claudeAiOauth": { ... }}'
+      style="width:100%;padding:12px;border-radius:10px;border:1px solid rgba(61,57,41,.25);font-family:monospace;font-size:.85rem"></textarea>
+    <button class="btn" type="button" onclick="pasteCreds()" style="margin-top:10px">Use these credentials</button>
+    <div id="pmsg" style="margin-top:10px;font-weight:600"></div>
+  </details>
+
   <p class="muted" style="margin-top:18px">
     <a class="back" href="#" onclick="return startOver()">Start over with a fresh code</a>
     &nbsp;·&nbsp; <a class="back" href="/">Back to dashboard</a></p>
 </div>
 <script>
+async function pasteCreds(){
+  var t=document.getElementById('creds').value.trim();
+  var m=document.getElementById('pmsg');
+  if(!t){ m.innerHTML='<span class="err">Paste the credentials first.</span>'; return; }
+  m.textContent='Saving…';
+  try{
+    var r=await fetch('/api/paste-creds',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({creds:t})});
+    var d=await r.json();
+    if(d.ok){ m.innerHTML='<span class="ok">Connected!'+(d.plan?(' ('+d.plan+' plan)'):'')+'</span> Redirecting…';
+      setTimeout(function(){location.href='/';},1500); }
+    else{ m.innerHTML='<span class="err">'+d.error+'</span>'; }
+  }catch(e){ m.innerHTML='<span class="err">Could not reach the tracker.</span>'; }
+}
 // Keep the sign-in link + PKCE verifier stable across mobile tab reloads:
 // if we've already started a flow, reuse it instead of the fresh one the
 // server just injected (so the code you got still matches).
@@ -535,6 +600,9 @@ def make_handler(state, demo):
             if path == "/api/connect":
                 self._handle_connect()
                 return
+            if path == "/api/paste-creds":
+                self._handle_paste()
+                return
             if path == "/api/wifi/join":
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 raw = self.rfile.read(length) if length else b"{}"
@@ -593,6 +661,26 @@ def make_handler(state, demo):
             except oauth_login.LoginError as exc:
                 self._send_json({"ok": False, "error": str(exc)})
             except Exception as exc:  # never crash the handler
+                self._send_json({"ok": False,
+                                 "error": f"Unexpected error: {exc}"})
+
+        def _handle_paste(self):
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                data = json.loads(raw.decode("utf-8") or "{}")
+            except ValueError:
+                data = {}
+            if demo:
+                self._send_json({"ok": False,
+                                 "error": "Disabled in demo mode."})
+                return
+            try:
+                plan = complete_paste(state, data.get("creds", ""))
+                self._send_json({"ok": True, "plan": plan})
+            except oauth_login.LoginError as exc:
+                self._send_json({"ok": False, "error": str(exc)})
+            except Exception as exc:
                 self._send_json({"ok": False,
                                  "error": f"Unexpected error: {exc}"})
 

@@ -76,13 +76,14 @@ def exchange_code(pasted, verifier):
         "code_verifier": verifier,
         "redirect_uri": REDIRECT_URI,
     }
-    # RFC 6749 token requests are form-encoded (this is what Claude Code sends).
-    body = urllib.parse.urlencode(payload).encode("utf-8")
+    # Working implementations of this flow (and Claude Code itself) send the
+    # token exchange as JSON, not form-encoding.
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         TOKEN_URL,
         data=body,
         headers={
-            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Type": "application/json",
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9",
             "User-Agent": USER_AGENT,
