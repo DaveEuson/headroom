@@ -94,15 +94,32 @@ class ST7789:
 
         self.dc = DigitalOutputDevice(DC_PIN)
         self.rst = DigitalOutputDevice(RST_PIN, initial_value=True)
-        # Whisplay backlight is ACTIVE-LOW (pin LOW = lit). active_high=False
-        # makes initial_value=True drive the pin low, i.e. backlight on.
-        self.backlight = DigitalOutputDevice(
-            BL_PIN, active_high=False, initial_value=True)
+        # Whisplay backlight is ACTIVE-LOW (pin LOW = lit). Prefer PWM so we
+        # can dim; fall back to plain on/off if PWM isn't available.
+        self._pwm_backlight = False
+        try:
+            from gpiozero import PWMOutputDevice
+            self.backlight = PWMOutputDevice(
+                BL_PIN, active_high=False, initial_value=1.0, frequency=1000)
+            self._pwm_backlight = True
+        except Exception:
+            self.backlight = DigitalOutputDevice(
+                BL_PIN, active_high=False, initial_value=True)
         self.spi = spidev.SpiDev()
         self.spi.open(0, 0)
         self.spi.max_speed_hz = SPI_HZ
         self.spi.mode = 0
         self._init_panel()
+
+    def set_brightness(self, level):
+        """level 0.0-1.0. With PWM this dims; without, it's on/off."""
+        level = max(0.0, min(1.0, float(level)))
+        if self._pwm_backlight:
+            self.backlight.value = level
+        elif level <= 0.02:
+            self.backlight.off()
+        else:
+            self.backlight.on()
 
     def _cmd(self, command, *params):
         self.dc.off()
@@ -201,6 +218,17 @@ def _is_night(snapshot):
         return False
     return (start <= mins or mins < end) if start > end \
         else (start <= mins < end)
+
+
+def _target_brightness(snapshot):
+    """Backlight level 0.0-1.0 from the brightness setting, dimmed at night."""
+    try:
+        b = max(0, min(100, int(snapshot.get("brightness", 100))))
+    except (TypeError, ValueError):
+        b = 100
+    if snapshot.get("night_dim", True) and _is_night(snapshot):
+        b = min(b, 15)          # gentle night glow
+    return b / 100.0
 
 
 def _theme_for(snapshot, night):
@@ -719,7 +747,9 @@ def run(snapshot_fn, config):
         if frame % 60 == 0:  # refresh in case the IP changed / came up late
             setup_url = _local_url(config, "/setup") or setup_url
         try:
-            panel.show(render(snapshot_fn(), frame, fonts, sprites, setup_url))
+            snap = snapshot_fn()
+            panel.show(render(snap, frame, fonts, sprites, setup_url))
+            panel.set_brightness(_target_brightness(snap))
         except Exception as exc:
             print(f"HAT display error: {exc}", file=sys.stderr)
             time.sleep(10)

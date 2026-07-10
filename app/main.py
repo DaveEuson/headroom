@@ -43,6 +43,8 @@ DEFAULT_CONFIG = {
     "push_token": "",         # optional shared secret the companion must send
     "theme": "auto",          # "auto" (day/night by schedule), "light", "dark"
     "clock_24h": False,       # 24-hour time instead of AM/PM
+    "brightness": 100,        # LCD backlight 0-100 (dims with PWM; on/off else)
+    "night_dim": True,        # dim the LCD during the night window
     "lcd_history": True,      # rotate a usage-history graph onto the LCD
     "audio_alerts": False,    # beep on out-of-credits / restored (off default)
     "push_service": "none",   # "none" | "ntfy" | "pushover"
@@ -144,9 +146,18 @@ def record_history(state, windows, now):
 
 
 # Settings the /settings page may change, each with a validator/normalizer.
+def _clamp_brightness(v):
+    try:
+        return max(10, min(100, int(round(float(v)))))
+    except (TypeError, ValueError):
+        return None
+
+
 SETTINGS_FIELDS = {
     "theme": lambda v: v if v in ("auto", "light", "dark") else None,
     "clock_24h": lambda v: bool(v),
+    "brightness": _clamp_brightness,
+    "night_dim": lambda v: bool(v),
     "lcd_history": lambda v: bool(v),
     "audio_alerts": lambda v: bool(v),
     "push_service": lambda v: v if v in ("none", "ntfy", "pushover") else None,
@@ -211,6 +222,8 @@ class State:
                 },
                 "theme": self.config.get("theme", "auto"),
                 "clock_24h": bool(self.config.get("clock_24h", False)),
+                "brightness": self.config.get("brightness", 100),
+                "night_dim": bool(self.config.get("night_dim", True)),
                 "lcd_history": bool(self.config.get("lcd_history", True)),
                 "history": {k: list(v) for k, v in self.history.items()},
                 "server_time": time.time(),
@@ -246,6 +259,8 @@ def demo_snapshot():
         "night": {"start": "22:00", "end": "07:00"},
         "theme": "auto",
         "clock_24h": False,
+        "brightness": 100,
+        "night_dim": True,
         "lcd_history": True,
         "history": _demo_history(t, session, weekly, opus),
         "server_time": t,
@@ -618,6 +633,14 @@ SETTINGS_PAGE = """<!DOCTYPE html>
       <label class="sw"><input type="checkbox" id="clock_24h"><span></span></label>
     </div>
     <div class="row">
+      <div class="lab">Brightness<small>Screen backlight (dims on HATs with PWM)</small></div>
+      <input type="range" id="brightness" min="10" max="100" step="5" style="flex:none;width:130px">
+    </div>
+    <div class="row">
+      <div class="lab">Dim at night<small>Lower the brightness during the night window</small></div>
+      <label class="sw"><input type="checkbox" id="night_dim"><span></span></label>
+    </div>
+    <div class="row">
       <div class="lab">Usage history on screen<small>Rotate a trend graph onto the LCD</small></div>
       <label class="sw"><input type="checkbox" id="lcd_history"><span></span></label>
     </div>
@@ -670,6 +693,8 @@ SETTINGS_PAGE = """<!DOCTYPE html>
       var s = await (await fetch("/api/settings")).json();
       document.getElementById("theme").value = s.theme || "auto";
       document.getElementById("clock_24h").checked = !!s.clock_24h;
+      document.getElementById("brightness").value = s.brightness || 100;
+      document.getElementById("night_dim").checked = !!s.night_dim;
       document.getElementById("lcd_history").checked = !!s.lcd_history;
       document.getElementById("audio_alerts").checked = !!s.audio_alerts;
       document.getElementById("push_service").value = s.push_service || "none";
@@ -692,6 +717,12 @@ SETTINGS_PAGE = """<!DOCTYPE html>
   });
   document.getElementById("clock_24h").addEventListener("change", function(e){
     save({ clock_24h: e.target.checked });
+  });
+  document.getElementById("brightness").addEventListener("change", function(e){
+    save({ brightness: parseInt(e.target.value, 10) });
+  });
+  document.getElementById("night_dim").addEventListener("change", function(e){
+    save({ night_dim: e.target.checked });
   });
   document.getElementById("lcd_history").addEventListener("change", function(e){
     save({ lcd_history: e.target.checked });
