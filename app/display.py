@@ -171,13 +171,15 @@ def _load_fonts():
     path = "/usr/share/fonts/truetype/dejavu/DejaVuSans%s.ttf"
     fonts = {}
     try:
+        fonts["huge"] = ImageFont.truetype(path % "-Bold", 46)
         fonts["clock"] = ImageFont.truetype(path % "-Bold", 34)
         fonts["big"] = ImageFont.truetype(path % "-Bold", 17)
         fonts["label"] = ImageFont.truetype(path % "", 14)
         fonts["small"] = ImageFont.truetype(path % "", 12)
     except OSError:
         default = ImageFont.load_default()
-        fonts = {k: default for k in ("clock", "big", "label", "small")}
+        fonts = {k: default for k in
+                 ("huge", "clock", "big", "label", "small")}
     return fonts
 
 
@@ -233,6 +235,40 @@ def _reset_text(resets_at):
     if hours:
         return f"resets in {hours}h {mins}m"
     return f"resets in {mins}m"
+
+
+def _seconds_until(resets_at):
+    if not resets_at:
+        return None
+    try:
+        when = datetime.datetime.fromisoformat(
+            str(resets_at).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return int((when - datetime.datetime.now(
+        datetime.timezone.utc)).total_seconds())
+
+
+def _countdown_hms(resets_at):
+    """Big live 'H:MM:SS' (or 'Dd HH:MM' past a day) countdown, or None."""
+    secs = _seconds_until(resets_at)
+    if secs is None:
+        return None
+    if secs <= 0:
+        return "0:00:00"
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    mins, s = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours:02d}:{mins:02d}"
+    return f"{hours}:{mins:02d}:{s:02d}"
+
+
+def _session_window(snapshot):
+    for w in (snapshot.get("windows") or []):
+        if w.get("key") == "five_hour":
+            return w
+    return None
 
 
 def _draw_pip(draw, mood, frame, theme):
@@ -430,21 +466,8 @@ def _render_setup(theme, fonts, url):
     return img
 
 
-def render(snapshot, frame, fonts, sprites=None, setup_url=None):
-    from PIL import Image, ImageDraw
-
-    night = _is_night(snapshot)
-    theme = THEMES["night" if night else "day"]
-    wifi = _wifi_setup_state()
-    if wifi:
-        return _render_wifi_setup(theme, fonts, wifi)
-    if _needs_setup(snapshot):
-        return _render_setup(theme, fonts, setup_url)
-    mood = _mood(snapshot, night)
-    img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
-    draw = ImageDraw.Draw(img)
-
-    # header: clock left, battery right
+def _draw_header(draw, snapshot, theme, fonts):
+    """Clock (left), battery (right), Wi-Fi name under it. Shared by screens."""
     clock = time.strftime("%I:%M %p").lstrip("0")
     draw.text((10, 6), clock, font=fonts["clock"], fill=theme["ink"])
     battery = snapshot.get("battery")
@@ -455,12 +478,9 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
         draw.text((230 - w, 8), label, font=fonts["big"], fill=theme["ink"])
         color = theme["crit"] if pct <= 10 else \
             theme["warn"] if pct <= 25 else theme["accent"]
-        track = theme["accent_track"]
-        draw.rounded_rectangle((186, 30, 230, 37), 3, fill=track)
+        draw.rounded_rectangle((186, 30, 230, 37), 3, fill=theme["accent_track"])
         draw.rounded_rectangle((186, 30, 186 + max(3, int(44 * pct / 100)),
                                 37), 3, fill=color)
-
-    # current Wi-Fi network, small under the battery (right side, clear of Pip)
     ssid = (snapshot.get("wifi") or {}).get("ssid")
     if ssid:
         label = str(ssid)[:16]
@@ -474,6 +494,8 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
         draw.text((230 - lw, y0), label, font=fonts["small"],
                   fill=theme["muted"])
 
+
+def _draw_mascot(img, draw, mood, frame, theme, sprites):
     sprite = (sprites or {}).get(mood)
     if sprite:
         bounce = -3 if (mood in ("happy", "panic") and frame % 2) else 0
@@ -482,10 +504,63 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
     else:
         _draw_pip(draw, mood, frame, theme)
 
-    # meters (first three windows) or the error banner
+
+def _render_maxed(theme, fonts, snapshot, frame, sprites):
+    """Session limit hit: a big live countdown to when it resets."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
+    draw = ImageDraw.Draw(img)
+    _draw_header(draw, snapshot, theme, fonts)
+    _draw_mascot(img, draw, "panic", frame, theme, sprites)
+    crit = theme["crit"]
+    sw = _session_window(snapshot) or {}
+    _center(draw, "Session limit reached", 148, fonts["label"], crit)
+    hms = _countdown_hms(sw.get("resets_at")) or "--:--"
+    _center(draw, hms, 168, fonts["huge"], crit)
+    _center(draw, "until your session resets", 224, fonts["small"],
+            theme["muted"])
+    # keep the weekly windows visible, condensed to one line
+    parts = []
+    for w in (snapshot.get("windows") or []):
+        if w.get("key") == "five_hour":
+            continue
+        rem = max(0.0, min(100.0, 100 - w["utilization"]))
+        lbl = SHORT_LABELS.get(w.get("key"), str(w["label"])[:10])
+        parts.append(f"{lbl} {rem:.0f}%")
+        if len(parts) == 2:
+            break
+    if parts:
+        _center(draw, "   ".join(parts), 252, fonts["small"], theme["muted"])
+    return img
+
+
+def render(snapshot, frame, fonts, sprites=None, setup_url=None):
+    from PIL import Image, ImageDraw
+
+    night = _is_night(snapshot)
+    theme = THEMES["night" if night else "day"]
+    wifi = _wifi_setup_state()
+    if wifi:
+        return _render_wifi_setup(theme, fonts, wifi)
+    if _needs_setup(snapshot):
+        return _render_setup(theme, fonts, setup_url)
+    mood = _mood(snapshot, night)
     error = snapshot.get("usage_error")
+
+    # Session fully used -> a big countdown is the only thing that matters.
+    sw = _session_window(snapshot)
+    if not error and sw is not None and (100 - sw.get("utilization", 0)) <= 0.5:
+        return _render_maxed(theme, fonts, snapshot, frame, sprites)
+
+    img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
+    draw = ImageDraw.Draw(img)
+    _draw_header(draw, snapshot, theme, fonts)
+    _draw_mascot(img, draw, mood, frame, theme, sprites)
+
+    # meters (first three windows) or the error banner
     windows = (snapshot.get("windows") or [])[:3]
-    y = 140
+    y = 134
     if error:
         words, line, lines = str(error).split(), "", []
         for word in words:
@@ -521,7 +596,7 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
             5, fill=fill)
         draw.text((12, y + 31), _reset_text(w.get("resets_at")),
                   font=fonts["small"], fill=theme["muted"])
-        y += 44
+        y += 48
     return img
 
 
