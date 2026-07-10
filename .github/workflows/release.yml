@@ -1,0 +1,63 @@
+name: Build companion binaries
+
+# Produces the double-click companion apps (no Python needed by end users).
+# Runs when you push a tag like v1.0.0, and attaches the binaries to the
+# GitHub Release so the device's setup page can link to them at
+# /releases/latest/download/ClaudeTrackerCompanion-<os>[.exe].
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: ClaudeTrackerCompanion-windows.exe
+          - os: macos-latest
+            asset: ClaudeTrackerCompanion-macos
+          - os: ubuntu-latest
+            asset: ClaudeTrackerCompanion-linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyinstaller
+      - name: Build
+        working-directory: companion
+        run: pyinstaller --onefile --name ClaudeTrackerCompanion --noconsole companion.py
+      - name: Rename for the platform
+        shell: bash
+        run: |
+          cd companion/dist
+          if [ -f ClaudeTrackerCompanion.exe ]; then
+            mv ClaudeTrackerCompanion.exe "${{ matrix.asset }}"
+          else
+            mv ClaudeTrackerCompanion "${{ matrix.asset }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: companion/dist/${{ matrix.asset }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

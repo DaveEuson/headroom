@@ -1,0 +1,430 @@
+/* ClaudeTrackerPi — Claude-flavored appliance dashboard.
+   Day = claude.ai's warm cream theme; night = its dark warm-gray theme.
+   Brand fonts (Styrene/Tiempos) are named first and fall back to safe
+   lookalikes for anyone who doesn't have them installed. */
+
+:root {
+  --font-ui: "Styrene B", "Styrene A", ui-sans-serif, system-ui,
+             -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-display: "Tiempos Text", "Tiempos Headline", Georgia,
+                  "Times New Roman", serif;
+
+  /* day: Claude cream */
+  --page: #f0eee6;
+  --surface: #faf9f5;
+  --ink: #3d3929;
+  --ink-2: #5e594e;
+  --muted: #8a8478;
+  --border: rgba(61, 57, 41, 0.12);
+
+  --accent: #d97757;        /* Claude orange — plenty left */
+  --accent-track: #ebd9ce;
+  --warn: #e8a317;          /* running low */
+  --warn-track: #f0e3c3;
+  --warn-text: #9a6700;
+  --crit: #c4453d;          /* almost out */
+  --crit-track: #efd7d3;
+  --crit-text: #b3372f;
+  --chip: #c15f3c;
+  --banner-bg: #f6e3dd;
+}
+
+body.night {
+  /* night: claude.ai dark */
+  --page: #262624;
+  --surface: #30302e;
+  --ink: #f5f4ef;
+  --ink-2: #cec9be;
+  --muted: #94907e;
+  --border: rgba(245, 244, 239, 0.10);
+
+  --accent-track: #4a382f;
+  --warn: #fab219;
+  --warn-track: #463b1a;
+  --warn-text: #fab219;
+  --crit: #e05252;
+  --crit-track: #4a2727;
+  --crit-text: #e05252;
+  --chip: #d97757;
+  --banner-bg: #4a2727;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.8s ease, color 0.8s ease;
+}
+
+.wrap {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 20px 16px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ---------- header ---------- */
+
+.top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.top-text h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.clock { margin-left: auto; text-align: right; }
+#clock-time {
+  font-family: var(--font-display);
+  font-size: 1.7rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.sub { display: flex; align-items: center; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+.muted { color: var(--muted); font-size: 0.82rem; }
+
+.chip {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--chip);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+/* ---------- cards ---------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  transition: background-color 0.8s ease;
+}
+
+.banner {
+  background: var(--banner-bg);
+  border: 1px solid var(--crit);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+.banner.setup {
+  background: var(--surface);
+  border-color: var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.connect-btn {
+  background: var(--accent);
+  color: #fff;
+  text-decoration: none;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.wifi-chip {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.8rem;
+  color: var(--ink-2);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+.wifi-chip:active { background: var(--surface); }
+
+/* ---------- meters ---------- */
+
+.meters { display: flex; flex-direction: column; gap: 18px; }
+.meters .loading { margin: 4px 0; }
+
+.window { display: flex; flex-direction: column; gap: 7px; }
+
+.win-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.win-label { font-size: 0.92rem; color: var(--ink-2); }
+
+.win-value {
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.win-value .unit { font-size: 0.8rem; font-weight: 500; color: var(--muted); margin-left: 3px; }
+
+.meter {
+  height: 14px;
+  border-radius: 7px;
+  background: var(--accent-track);
+  overflow: hidden;
+}
+.meter .fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 0 7px 7px 0;
+  transition: width 0.8s ease, background-color 0.4s ease;
+  min-width: 3px;
+}
+.meter.mini { height: 8px; border-radius: 4px; }
+.meter.mini .fill { border-radius: 0 4px 4px 0; }
+
+.window.low  .meter { background: var(--warn-track); }
+.window.low  .fill  { background: var(--warn); }
+.window.crit .meter { background: var(--crit-track); }
+.window.crit .fill  { background: var(--crit); }
+
+.win-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+}
+.window.low  .state { color: var(--warn-text); }
+.window.crit .state { color: var(--crit-text); }
+
+/* ---------- battery ---------- */
+
+.battery { display: flex; flex-direction: column; gap: 8px; }
+.stat { display: flex; justify-content: space-between; align-items: baseline; }
+.stat-label { font-size: 0.92rem; color: var(--ink-2); }
+.stat-value {
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.stat-value .unit { font-size: 0.8rem; font-weight: 500; color: var(--muted); }
+.battery.low  .meter { background: var(--warn-track); }
+.battery.low  .fill  { background: var(--warn); }
+.battery.crit .meter { background: var(--crit-track); }
+.battery.crit .fill  { background: var(--crit); }
+
+.foot { text-align: center; }
+.foot a { color: var(--muted); }
+
+/* ---------- mascot ---------- */
+
+.mascot { flex: none; line-height: 0; --phos: #4cd97b; }
+
+/* sprite mode: custom PNG artwork replaces the built-in vector Pip;
+   the whole image gets the mood's body animation */
+.mascot.sprite img {
+  width: 104px;
+  height: auto;
+  display: block;
+  transform-origin: 50% 90%;
+}
+.sprite.mood-happy img   { animation: bounce 0.9s ease-in-out infinite; }
+.sprite.mood-chill img   { animation: groove 4s ease-in-out infinite; }
+.sprite.mood-worried img { animation: sway 1.6s ease-in-out infinite; }
+.sprite.mood-panic img   { animation: shake 0.35s linear infinite; }
+.sprite.mood-sleep img   { animation: breathe 4s ease-in-out infinite; }
+
+.m-body { transform-origin: 60px 60px; }
+.m-arm-l { transform-origin: 22px 46px; }
+.m-arm-r { transform-origin: 98px 46px; }
+.m-leg-l { transform-origin: 44px 88px; }
+.m-leg-r { transform-origin: 76px 88px; }
+
+/* everything on the screen glows in the current phosphor color */
+.m-phos { fill: var(--phos); }
+.m-phos-s { stroke: var(--phos); }
+.m-sweat, .m-mouth-o, .m-mouth-flat, .m-shades, .m-cap, .m-z,
+.m-code, .m-moon { opacity: 0; }
+
+/* chill (no session running): sunglasses screensaver, slow groove */
+.mood-chill .m-body   { animation: groove 4s ease-in-out infinite; }
+.mood-chill .m-shades { opacity: 1; }
+.mood-chill .m-eyes-open { opacity: 0; }
+
+/* happy (session detected): dances while code types across the screen */
+.mood-happy .m-body   { animation: bounce 0.9s ease-in-out infinite; }
+.mood-happy .m-arm-l  { animation: wave-l 0.9s ease-in-out infinite; }
+.mood-happy .m-arm-r  { animation: wave-r 0.9s ease-in-out infinite; }
+.mood-happy .m-leg-l  { animation: kick-l 0.9s ease-in-out infinite; }
+.mood-happy .m-leg-r  { animation: kick-r 0.9s ease-in-out infinite; }
+.mood-happy .m-face   { opacity: 0; }
+.mood-happy .m-code   { opacity: 1; }
+.mood-happy .m-line   { animation: typing 3.2s linear infinite; }
+.mood-happy .m-l2 { animation-delay: 0.4s; }
+.mood-happy .m-l3 { animation-delay: 0.8s; }
+.mood-happy .m-l4 { animation-delay: 1.2s; }
+.mood-happy .m-l5 { animation-delay: 1.6s; }
+.mood-happy .m-l6 { animation-delay: 2.0s; }
+.mood-happy .m-cursor { animation: cursorblink 1s steps(1) infinite; }
+
+/* worried: amber screen, flat mouth, sway + sweat drop */
+.mood-worried { --phos: #fab219; }
+.mood-worried .m-body  { animation: sway 1.6s ease-in-out infinite; }
+.mood-worried .m-sweat { opacity: 1; animation: drip 1.6s ease-in infinite; }
+.mood-worried .m-mouth-smile { opacity: 0; }
+.mood-worried .m-mouth-flat  { opacity: 1; }
+
+/* panic: red screen, o-mouth, shake, sweat */
+.mood-panic { --phos: #ff6f61; }
+.mood-panic .m-body  { animation: shake 0.35s linear infinite; }
+.mood-panic .m-sweat { opacity: 1; animation: drip 0.8s ease-in infinite; }
+.mood-panic .m-mouth-smile { opacity: 0; }
+.mood-panic .m-mouth-o { opacity: 1; }
+.mood-panic .m-arm-l { animation: flail-l 0.35s linear infinite; }
+.mood-panic .m-arm-r { animation: flail-r 0.35s linear infinite; }
+.mood-panic .m-leg-l { animation: kick-l 0.35s linear infinite; }
+.mood-panic .m-leg-r { animation: kick-r 0.35s linear infinite; }
+
+/* asleep (at night): nightcap, moon on screen, slow breathing, Zzz */
+.mood-sleep .m-body { animation: breathe 4s ease-in-out infinite; }
+.mood-sleep .m-cap  { opacity: 1; }
+.mood-sleep .m-face { opacity: 0; }
+.mood-sleep .m-moon { opacity: 1; }
+.mood-sleep .m-z1 { animation: zfloat 4s linear infinite; }
+.mood-sleep .m-z2 { animation: zfloat 4s linear 1.3s infinite; }
+.mood-sleep .m-z3 { animation: zfloat 4s linear 2.6s infinite; }
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0) rotate(-5deg) scale(1, 1); }
+  25%      { transform: translateY(-7px) rotate(0deg) scale(0.98, 1.03); }
+  50%      { transform: translateY(0) rotate(5deg) scale(1.03, 0.97); }
+  75%      { transform: translateY(-7px) rotate(0deg) scale(0.98, 1.03); }
+}
+@keyframes sway {
+  0%, 100% { transform: rotate(-4deg); }
+  50%      { transform: rotate(4deg); }
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25%      { transform: translateX(-3px) rotate(-2deg); }
+  75%      { transform: translateX(3px) rotate(2deg); }
+}
+@keyframes wave-l {
+  0%, 100% { transform: rotate(0deg); }
+  50%      { transform: rotate(60deg); }
+}
+@keyframes wave-r {
+  0%, 100% { transform: rotate(0deg); }
+  50%      { transform: rotate(-60deg); }
+}
+@keyframes flail-l {
+  0%, 100% { transform: rotate(30deg); }
+  50%      { transform: rotate(80deg); }
+}
+@keyframes flail-r {
+  0%, 100% { transform: rotate(-30deg); }
+  50%      { transform: rotate(-80deg); }
+}
+@keyframes kick-l {
+  0%, 100% { transform: rotate(0deg); }
+  50%      { transform: rotate(-20deg); }
+}
+@keyframes kick-r {
+  0%, 100% { transform: rotate(0deg); }
+  25%      { transform: rotate(20deg); }
+}
+@keyframes drip {
+  0%   { transform: translateY(0); opacity: 0; }
+  30%  { opacity: 1; }
+  100% { transform: translateY(14px); opacity: 0; }
+}
+@keyframes typing {
+  0%   { opacity: 0; }
+  6%   { opacity: 1; }
+  88%  { opacity: 1; }
+  94%, 100% { opacity: 0; }
+}
+@keyframes cursorblink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+@keyframes groove {
+  0%, 100% { transform: rotate(-2.5deg) translateY(0); }
+  50%      { transform: rotate(2.5deg) translateY(-2px); }
+}
+@keyframes breathe {
+  0%, 100% { transform: scale(1, 1); }
+  50%      { transform: scale(1.025, 0.965); }
+}
+@keyframes zfloat {
+  0%   { transform: translate(0, 0); opacity: 0; }
+  20%  { opacity: 1; }
+  100% { transform: translate(5px, -14px); opacity: 0; }
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot * { animation: none !important; }
+}
+
+/* ---------- small screens (5" Pi panels, 800x480 and under) ---------- */
+
+@media (max-height: 620px) {
+  .wrap { padding: 10px 12px 12px; gap: 9px; }
+  .top { gap: 10px; }
+  .mascot svg { width: 66px; height: 73px; }
+  .mascot.sprite img { width: 66px; height: auto; }
+  .top-text h1 { font-size: 1.1rem; }
+  .sub { margin-top: 2px; gap: 7px; }
+  .chip { font-size: 0.62rem; padding: 2px 8px; }
+  .muted { font-size: 0.72rem; }
+  #clock-time { font-size: 1.3rem; }
+  .card { padding: 10px 14px; border-radius: 11px; }
+  .meters { gap: 9px; }
+  .window { gap: 3px; }
+  .win-label, .stat-label { font-size: 0.8rem; }
+  .win-value, .stat-value { font-size: 1.08rem; }
+  .meter { height: 10px; border-radius: 5px; }
+  .meter.mini { height: 6px; }
+  .win-foot { font-size: 0.7rem; }
+  .battery { gap: 4px; }
+  .foot { display: none; }
+}
+
+/* ---------- tiny screens (3.5" panels, 480x320) ---------- */
+
+@media (max-height: 380px) {
+  .wrap { padding: 6px 10px 8px; gap: 6px; }
+  .mascot svg { width: 48px; height: 53px; }
+  .mascot.sprite img { width: 48px; height: auto; }
+  .top-text h1 { font-size: 0.95rem; }
+  #clock-time { font-size: 1.05rem; }
+  #clock-date { display: none; }
+  .card { padding: 7px 12px; }
+  .meters { gap: 5px; }
+  .window { gap: 2px; }
+  .meter { height: 8px; }
+  .win-value, .stat-value { font-size: 0.95rem; }
+  .win-foot { font-size: 0.64rem; }
+  .banner { padding: 6px 10px; font-size: 0.72rem; }
+}
