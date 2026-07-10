@@ -172,7 +172,7 @@ def _load_fonts():
     fonts = {}
     try:
         fonts["huge"] = ImageFont.truetype(path % "-Bold", 46)
-        fonts["clock"] = ImageFont.truetype(path % "-Bold", 34)
+        fonts["clock"] = ImageFont.truetype(path % "-Bold", 28)
         fonts["big"] = ImageFont.truetype(path % "-Bold", 17)
         fonts["label"] = ImageFont.truetype(path % "", 14)
         fonts["small"] = ImageFont.truetype(path % "", 12)
