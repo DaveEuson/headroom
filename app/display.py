@@ -296,7 +296,19 @@ def _draw_pip(draw, mood, frame, theme):
 
 
 _SETUP_HINTS = ("credential", "sign-in", "sign in", "log in", "login",
-                "access token", "re-copy", "not logged in")
+                "access token", "re-copy", "not logged in", "not connected")
+
+WIFI_STATE_FILE = "/run/claude-tracker/wifi.json"
+
+
+def _wifi_setup_state():
+    """First-boot Wi-Fi provisioning state written by wifi_setup.py."""
+    import json as _json
+    try:
+        with open(WIFI_STATE_FILE, encoding="utf-8") as fh:
+            return _json.load(fh)
+    except (OSError, ValueError):
+        return None
 
 
 def _needs_setup(snapshot):
@@ -361,6 +373,40 @@ def _center(draw, text, y, font, fill):
     draw.text(((WIDTH - w) / 2, y), text, font=font, fill=fill)
 
 
+def _render_wifi_setup(theme, fonts, wifi):
+    """First-boot screen: QR that joins the Pi's own setup hotspot."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
+    draw = ImageDraw.Draw(img)
+    if wifi.get("joining"):
+        _center(draw, "Connecting to", 96, fonts["big"], theme["ink"])
+        _center(draw, str(wifi["joining"])[:22], 122, fonts["big"],
+                theme["accent"])
+        _center(draw, "watch this screen...", 152, fonts["small"],
+                theme["muted"])
+        return img
+    _center(draw, "Wi-Fi setup", 10, fonts["clock"], theme["ink"])
+    _center(draw, "Scan to join me, then a", 50, fonts["small"],
+            theme["muted"])
+    _center(draw, "setup page opens on your phone", 65, fonts["small"],
+            theme["muted"])
+    ssid = wifi.get("ssid", "ClaudeTracker-Setup")
+    psk = wifi.get("password", "")
+    qr = _qr_image(f"WIFI:T:WPA;S:{ssid};P:{psk};;", 140)
+    if qr:
+        img.paste(qr, ((WIDTH - qr.width) // 2, 82))
+        y = 82 + qr.height + 6
+    else:
+        y = 150
+    _center(draw, f"Wi-Fi: {ssid}", y, fonts["small"], theme["ink"])
+    _center(draw, f"password: {psk}", y + 16, fonts["small"], theme["ink"])
+    if wifi.get("error"):
+        _center(draw, "last try failed - password?", y + 34, fonts["small"],
+                theme["crit"])
+    return img
+
+
 def _render_setup(theme, fonts, url):
     """First-run screen: a QR code that opens the dashboard on a phone."""
     from PIL import Image, ImageDraw
@@ -389,6 +435,9 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
 
     night = _is_night(snapshot)
     theme = THEMES["night" if night else "day"]
+    wifi = _wifi_setup_state()
+    if wifi:
+        return _render_wifi_setup(theme, fonts, wifi)
     if _needs_setup(snapshot):
         return _render_setup(theme, fonts, setup_url)
     mood = _mood(snapshot, night)

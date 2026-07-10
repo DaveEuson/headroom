@@ -47,8 +47,40 @@ RestartSec=10
 WantedBy=multi-user.target
 UNIT
 
+# First-boot Wi-Fi provisioning: if the Pi has no network, it becomes a
+# hotspot ("ClaudeTracker-Setup") with a phone setup page. Needs
+# NetworkManager (default on Raspberry Pi OS Bookworm and later).
+if command -v nmcli >/dev/null; then
+  echo "Installing Wi-Fi setup service '$SERVICE-wifi'..."
+  sudo tee /etc/systemd/system/$SERVICE-wifi.service >/dev/null <<UNIT
+[Unit]
+Description=ClaudeTrackerPi - first-boot Wi-Fi provisioning hotspot
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 $DIR/app/wifi_setup.py
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  # wildcard DNS while the hotspot is up, so the setup page pops open
+  # automatically on phones (applies only to NM's shared/hotspot mode)
+  sudo mkdir -p /etc/NetworkManager/dnsmasq-shared.d
+  echo "address=/#/10.42.0.1" | \
+    sudo tee /etc/NetworkManager/dnsmasq-shared.d/claude-tracker.conf >/dev/null
+  sudo systemctl enable $SERVICE-wifi >/dev/null
+else
+  echo "NetworkManager (nmcli) not found - skipping Wi-Fi setup hotspot."
+fi
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now $SERVICE
+sudo systemctl start $SERVICE-wifi 2>/dev/null || true
 
 HOST=$(hostname)
 echo

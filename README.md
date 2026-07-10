@@ -27,6 +27,10 @@ used right now — no terminal, no menubar, no estimating.
   screen shows a "Set me up" QR code; scan it, tap **Sign in with Claude**, and
   authenticate right on your phone (OAuth, the same login Claude Code uses) —
   no computer, no scripts, no files to copy
+- **Wi-Fi setup hotspot** — plug it in somewhere new and it can't find a
+  network? It becomes its own Wi-Fi (`ClaudeTracker-Setup`) and shows a
+  scan-to-join QR; a setup page pops up on your phone where you pick your
+  home network
 - **Pip.** The tracker's mascot: a little retro computer. Between sessions
   it chills with a sunglasses screensaver; the moment it detects you're
   actually using Claude it starts dancing while code flies across its
@@ -66,6 +70,14 @@ you're connected. No computer, no scripts, no files to copy.
 That's it — the meters go live immediately. The tracker refreshes its token
 automatically from then on, so this is a one-time step. If the sign-in ever
 expires, the dashboard shows the button again.
+
+### Moving it to a new network?
+
+If the Pi boots and can't find a known Wi-Fi network for ~45 seconds, the
+screen switches to **Wi-Fi setup**: scan the QR to join its
+`ClaudeTracker-Setup` hotspot, and a page opens on your phone to pick your
+network and enter the password. Once it hops over, the normal setup/dashboard
+takes over. (Requires NetworkManager — standard on Raspberry Pi OS.)
 
 > **Prefer to reuse an existing Claude Code login?** Two shortcuts:
 > - Already run Claude Code *on the Pi itself*? The tracker auto-detects
