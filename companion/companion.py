@@ -53,12 +53,22 @@ WINDOW_LABELS = {
     "extra_usage": "Extra usage",
 }
 
-# Fallback-only: rough token budgets if we must estimate from logs.
-DEFAULT_LIMITS = {
-    "five_hour": 220_000_000,
-    "seven_day": 1_500_000_000,
-    "seven_day_opus": 300_000_000,
+# Fallback-only: rough token budgets if we must estimate from logs. Anthropic
+# doesn't publish real caps, so these are ballpark; "max" is ~5x "pro". Only
+# used when there's no Claude Code login to read the real numbers from.
+PLAN_PRESETS = {
+    "max": {
+        "five_hour": 220_000_000,
+        "seven_day": 1_500_000_000,
+        "seven_day_opus": 300_000_000,
+    },
+    "pro": {
+        "five_hour": 44_000_000,
+        "seven_day": 300_000_000,
+        "seven_day_opus": 60_000_000,
+    },
 }
+DEFAULT_LIMITS = PLAN_PRESETS["max"]
 FIVE_HOURS, SEVEN_DAYS = 5 * 3600, 7 * 86400
 
 
@@ -439,19 +449,48 @@ def uninstall_autostart():
 
 
 def load_config():
-    cfg = {"pi": None, "token": "", "interval": 120,
-           "limits": dict(DEFAULT_LIMITS)}
+    cfg = {"pi": None, "token": "", "interval": 120, "plan": "max"}
+    data = {}
     path = _config_path()
     if os.path.isfile(path):
         try:
             with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
-            cfg.update({k: data[k] for k in ("pi", "token", "interval") if k in data})
-            if isinstance(data.get("limits"), dict):
-                cfg["limits"].update(data["limits"])
+            cfg.update({k: data[k] for k in ("pi", "token", "interval")
+                        if k in data})
+            if data.get("plan") in PLAN_PRESETS:
+                cfg["plan"] = data["plan"]
         except (OSError, ValueError) as exc:
             print(f"Ignoring bad companion.config.json: {exc}", file=sys.stderr)
+    # Estimation budgets: start from the plan preset, then apply any overrides.
+    cfg["limits"] = dict(PLAN_PRESETS[cfg["plan"]])
+    if isinstance(data.get("limits"), dict):
+        cfg["limits"].update(data["limits"])
     return cfg
+
+
+def _print_no_claude():
+    """A clear, actionable message when there's no Claude Code login to read."""
+    claude_dir = os.path.join(os.path.expanduser("~"), ".claude")
+    print("", file=sys.stderr)
+    print("Can't find your Claude usage on this computer.", file=sys.stderr)
+    if os.path.isdir(claude_dir):
+        print("  Claude Code is installed here, but you're not signed in.",
+              file=sys.stderr)
+        print("  Fix: open a terminal, run  claude  , then type  /login .",
+              file=sys.stderr)
+    else:
+        print("  Claude Code (the CLI) isn't installed on this computer.",
+              file=sys.stderr)
+        print("  The tracker reads Claude Code's own login to get your real",
+              file=sys.stderr)
+        print("  usage, so it needs Claude Code installed and signed in HERE.",
+              file=sys.stderr)
+        print("  Install:  npm install -g @anthropic-ai/claude-code",
+              file=sys.stderr)
+        print("  then run  claude  and type  /login .", file=sys.stderr)
+    print("  (Run this companion on the same computer where you use Claude "
+          "Code — not on the Pi.)", file=sys.stderr)
 
 
 def run_once(cfg):
@@ -463,8 +502,7 @@ def run_once(cfg):
         windows = get_log_windows(cfg["limits"])
         plan, source = None, "estimated"
         if not windows:
-            print("No Claude Code login or logs found on this machine. Is "
-                  "Claude Code installed and signed in here?", file=sys.stderr)
+            _print_no_claude()
             return False
     payload = {"windows": windows, "plan": plan, "source": source}
     try:
