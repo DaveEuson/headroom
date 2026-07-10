@@ -91,6 +91,7 @@ class State:
     def snapshot(self):
         with self.lock:
             return {
+                "app": "ClaudeTrackerPi",
                 "windows": (self.usage or {}).get("windows", []),
                 "plan": (self.usage or {}).get("plan"),
                 "usage_error": self.usage_error,
@@ -119,6 +120,7 @@ def demo_snapshot():
     session_reset = now + datetime.timedelta(hours=2, minutes=14)
     weekly_reset = now + datetime.timedelta(days=3, hours=5)
     return {
+        "app": "ClaudeTrackerPi",
         "windows": [
             {"key": "five_hour", "label": "Session (5 hour)",
              "utilization": round(session, 1),

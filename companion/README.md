@@ -21,28 +21,23 @@ usage from Claude Code's local logs (`~/.claude/projects`).
 
 You need Python 3 (already on macOS/Linux; on Windows install from
 [python.org](https://www.python.org/downloads/) and tick "Add to PATH").
+*(Want a no-Python double-click app for end users? See [BUILD.md](BUILD.md).)*
 
 1. Copy this `companion/` folder to the computer where you run Claude Code
    (or clone the repo there).
-2. Run it, pointing at your Pi:
+2. Run it:
 
    ```bash
-   python3 companion.py --pi http://claudecounter.local:8080
+   python3 companion.py
    ```
 
-   (use your Pi's address — the tracker screen shows it). It prints a line
-   every couple of minutes as it pushes; leave it running.
+That's it. With no arguments it **finds the tracker on your network by itself**,
+starts feeding it, and **sets itself to run at every login** — so you do this
+once and never again. (If auto-discovery can't find it, pass
+`--pi http://<its-address>:8080`, shown on the tracker screen.)
 
-That's it — the Pi's meters go live.
-
-## Keep it running automatically
-
-- **macOS/Linux:** add it to your login items / a cron `@reboot`, or run under
-  `tmux`/`screen`.
-- **Windows:** put a shortcut to
-  `pythonw companion.py --pi http://claudecounter.local:8080` in your Startup
-  folder (`Win+R` → `shell:startup`). `pythonw` runs it without a console
-  window.
+- Stop it auto-running: `python3 companion.py --uninstall`
+- Don't auto-install in the first place: add `--no-install`
 
 ## Configure without flags
 

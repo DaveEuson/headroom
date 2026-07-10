@@ -22,15 +22,19 @@ Standard library only, Python 3.8+.
 """
 
 import argparse
+import concurrent.futures
 import datetime
 import glob
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+
+APP_MARKER = "ClaudeTrackerPi"  # /api/status "app" field, used for discovery
 
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
@@ -291,11 +295,153 @@ def push(pi_url, token, payload):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _config_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "companion.config.json")
+
+
+# ------------------------------------------------------ auto-discover the Pi
+
+def _probe(url):
+    try:
+        req = urllib.request.Request(url.rstrip("/") + "/api/status")
+        with urllib.request.urlopen(req, timeout=0.8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data.get("app") == APP_MARKER
+    except Exception:
+        return False
+
+
+def discover_pi(port=8080):
+    """Find the tracker on the LAN with no address typing. Returns URL or None."""
+    for host in ("claudetracker.local", "claudecounter.local"):
+        url = f"http://{host}:{port}"
+        if _probe(url):
+            return url
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("8.8.8.8", 80))
+        prefix = sock.getsockname()[0].rsplit(".", 1)[0]
+        sock.close()
+    except OSError:
+        return None
+    urls = [f"http://{prefix}.{i}:{port}" for i in range(1, 255)]
+    print("Looking for your tracker on the network...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=64) as ex:
+        futures = {ex.submit(_probe, u): u for u in urls}
+        for fut in concurrent.futures.as_completed(futures):
+            try:
+                if fut.result():
+                    return futures[fut]
+            except Exception:
+                pass
+    return None
+
+
+def save_pi(url):
+    path = _config_path()
+    data = {}
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            data = {}
+    data["pi"] = url
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+    except OSError:
+        pass
+
+
+# --------------------------------------------------------- run on every login
+
+INSTALLED_MARKER = os.path.expanduser("~/.claudetracker-companion-installed")
+
+
+def install_autostart():
+    """Set the companion to launch at login. Returns a human-readable path."""
+    script = os.path.abspath(__file__)
+    py = sys.executable or "python3"
+    if sys.platform == "win32":
+        pyw = py[:-len("python.exe")] + "pythonw.exe" \
+            if py.lower().endswith("python.exe") else py
+        startup = os.path.join(os.environ.get("APPDATA", ""), "Microsoft",
+                               "Windows", "Start Menu", "Programs", "Startup")
+        os.makedirs(startup, exist_ok=True)
+        target = os.path.join(startup, "ClaudeTrackerCompanion.bat")
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write(f'@echo off\r\nstart "" "{pyw}" "{script}"\r\n')
+        return target
+    if sys.platform == "darwin":
+        d = os.path.expanduser("~/Library/LaunchAgents")
+        os.makedirs(d, exist_ok=True)
+        target = os.path.join(d, "com.claudetracker.companion.plist")
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write(f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claudetracker.companion</string>
+  <key>ProgramArguments</key>
+  <array><string>{py}</string><string>{script}</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict></plist>""")
+        subprocess.run(["launchctl", "unload", target],
+                       capture_output=True)
+        subprocess.run(["launchctl", "load", target], capture_output=True)
+        return target
+    # linux
+    d = os.path.expanduser("~/.config/systemd/user")
+    os.makedirs(d, exist_ok=True)
+    target = os.path.join(d, "claudetracker-companion.service")
+    with open(target, "w", encoding="utf-8") as fh:
+        fh.write(f"""[Unit]
+Description=ClaudeTracker companion
+After=network-online.target
+
+[Service]
+ExecStart={py} {script}
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+""")
+    subprocess.run(["systemctl", "--user", "enable", "--now",
+                    "claudetracker-companion"], capture_output=True)
+    return target
+
+
+def uninstall_autostart():
+    removed = []
+    for p in (
+        os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows",
+                     "Start Menu", "Programs", "Startup",
+                     "ClaudeTrackerCompanion.bat"),
+        os.path.expanduser("~/Library/LaunchAgents/"
+                           "com.claudetracker.companion.plist"),
+        os.path.expanduser("~/.config/systemd/user/"
+                           "claudetracker-companion.service"),
+    ):
+        if os.path.isfile(p):
+            try:
+                os.remove(p)
+                removed.append(p)
+            except OSError:
+                pass
+    for m in (INSTALLED_MARKER,):
+        if os.path.isfile(m):
+            os.remove(m)
+    return removed
+
+
 def load_config():
     cfg = {"pi": None, "token": "", "interval": 120,
            "limits": dict(DEFAULT_LIMITS)}
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "companion.config.json")
+    path = _config_path()
     if os.path.isfile(path):
         try:
             with open(path, encoding="utf-8") as fh:
@@ -340,22 +486,50 @@ def main():
     cfg = load_config()
     ap = argparse.ArgumentParser(description="ClaudeTracker companion")
     ap.add_argument("--pi", default=cfg["pi"],
-                    help="Pi dashboard URL, e.g. http://claudecounter.local:8080")
+                    help="tracker URL (auto-discovered if omitted)")
     ap.add_argument("--token", default=cfg["token"])
     ap.add_argument("--interval", type=int, default=cfg["interval"])
-    ap.add_argument("--once", action="store_true")
+    ap.add_argument("--once", action="store_true", help="push once and exit")
+    ap.add_argument("--no-install", action="store_true",
+                    help="don't add to startup")
+    ap.add_argument("--uninstall", action="store_true",
+                    help="remove from startup and exit")
     args = ap.parse_args()
+
+    if args.uninstall:
+        removed = uninstall_autostart()
+        print("Removed:\n  " + "\n  ".join(removed) if removed
+              else "Nothing to remove.")
+        return
+
     cfg["pi"], cfg["token"], cfg["interval"] = args.pi, args.token, args.interval
     if not cfg["pi"]:
-        ap.error("no Pi address. Pass --pi http://<pi>:8080 or set it in "
-                 "companion.config.json")
+        cfg["pi"] = discover_pi()
+        if cfg["pi"]:
+            print(f"Found your tracker at {cfg['pi']}")
+            save_pi(cfg["pi"])
+        else:
+            ap.error("couldn't find the tracker on your network. Make sure it's "
+                     "powered on and on the same Wi-Fi, or pass "
+                     "--pi http://<its-address>:8080")
 
     print(f"ClaudeTracker companion -> {cfg['pi']} (every {cfg['interval']}s)")
     if args.once:
         sys.exit(0 if run_once(cfg) else 1)
+
+    first_ok = run_once(cfg)
+    if first_ok and not args.no_install and not os.path.isfile(INSTALLED_MARKER):
+        try:
+            where = install_autostart()
+            with open(INSTALLED_MARKER, "w", encoding="utf-8") as fh:
+                fh.write(cfg["pi"])
+            print(f"Set to run automatically at login.\n  {where}\n"
+                  "  (run with --uninstall to stop)")
+        except Exception as exc:  # noqa: BLE001
+            print(f"(couldn't set auto-start: {exc})", file=sys.stderr)
     while True:
-        run_once(cfg)
         time.sleep(max(30, cfg["interval"]))
+        run_once(cfg)
 
 
 if __name__ == "__main__":
