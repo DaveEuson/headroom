@@ -47,7 +47,35 @@ process serving one page. It idles in a few MB of RAM on the Zero 2 W, and
 you view it from any browser on your network (phone, laptop, or a small
 screen on the Pi itself in kiosk mode).
 
-## Setup (two steps)
+## Got a kit? First plug-in
+
+If you bought a pre-assembled kit, the SD card already has everything
+installed and set to start on boot — you never touch a terminal. From
+power-on to live meters is about five minutes:
+
+1. **Plug in the USB-C power.** It boots in under a minute. (The PiSugar
+   battery means it's instant-on and can even run untethered.)
+2. **Join it to your Wi-Fi.** On first boot it makes its own hotspot and the
+   screen shows a QR code. Scan it with your phone — a setup page opens by
+   itself. Pick your home network and enter the password; the screen shows
+   *"Connecting…"* and hops over.
+3. **The screen says "Almost there"** and shows an address. On the computer
+   where you use Claude Code, open that address in a browser (e.g.
+   `http://claudetracker.local:8080/setup`).
+4. **Download the companion** for your OS from that page and double-click it.
+   (First launch: macOS → right-click → **Open**; Windows → **More info →
+   Run anyway**.) It finds the tracker on the network by itself, sends the
+   first reading, and sets itself to run at every login.
+5. **Done.** The QR disappears and the screen comes alive — meters, reset
+   countdowns, battery, and Pip reacting to your usage. You never touch the
+   companion again.
+
+> **One requirement:** the companion reads the Claude Code login already on
+> your computer, so you need **Claude Code signed in** on the machine in
+> steps 3–4 (a Pro or Max plan). If you only use Claude in a browser, there's
+> no login for it to read — this tracker is for Claude Code users.
+
+## Build it yourself (two steps)
 
 ### 1. On the Pi
 
