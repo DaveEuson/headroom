@@ -65,10 +65,14 @@ Copy `companion.config.example.json` to `companion.config.json` next to
   "pi": "http://claudecounter.local:8080",
   "token": "",
   "interval": 120,
-  "plan": "max",
-  "limits": { "five_hour": 220000000, "seven_day": 1500000000, "seven_day_opus": 300000000 }
+  "plan": "max"
 }
 ```
+
+`"plan"` is `"max"` or `"pro"` and just picks the fallback estimation budgets
+(Pro's are ~1/5 of Max's). It only matters when there's no Claude Code login to
+read — live numbers ignore it. Add an explicit `"limits": { … }` object to
+override the budgets by hand.
 
 ## About the percentages
 
