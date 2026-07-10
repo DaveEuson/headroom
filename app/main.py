@@ -8,7 +8,6 @@ Standard library only, sized for a Pi Zero 2 W.
 
 import argparse
 import datetime
-import html
 import json
 import math
 import os
@@ -23,7 +22,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import anthropic_usage
 import display
-import oauth_login
 import pisugar
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -85,7 +83,6 @@ class State:
         self.battery_present = True
         self.prev_utilization = None  # {window key: utilization} from last poll
         self.last_activity = 0.0      # when utilization last went up
-        self.pending_verifier = None  # PKCE verifier during phone sign-in
         self.wifi = {"ssid": None, "ip": None}  # current network
 
     def snapshot(self):
@@ -163,8 +160,8 @@ def start_pollers(state, config):
             path = anthropic_usage.find_credentials_path(creds_configured)
             if path is None:
                 message = (
-                    "Not connected to Claude yet — open this dashboard and "
-                    "tap 'Sign in with Claude'."
+                    "No Claude credentials on this device. Use the companion "
+                    "app instead — see the setup guide."
                 )
                 with state.lock:
                     state.usage_error = message
@@ -234,42 +231,6 @@ def _creds_write_path(config):
     return os.path.expanduser("~/.claude-tracker/credentials.json")
 
 
-def complete_login(state, code, verifier=None):
-    """Exchange a pasted code, save credentials, and refresh usage now.
-
-    Returns the plan name on success. Raises oauth_login.LoginError on
-    anything the user can fix (bad/expired code, expired session). The
-    verifier is sent back by the page (robust to mobile tab reloads); we
-    fall back to the server-held one for older page loads.
-    """
-    verifier = verifier or state.pending_verifier
-    if not verifier:
-        raise oauth_login.LoginError(
-            "This sign-in link expired. Reload the page and try again."
-        )
-    oauth = oauth_login.exchange_code(code, verifier)
-    path = _creds_write_path(state.config)
-    oauth_login.save_credentials(oauth, path)
-    with state.lock:
-        state.pending_verifier = None
-    try:
-        usage = anthropic_usage.fetch_usage(path)
-        with state.lock:
-            state.usage = usage
-            state.usage_error = None
-            state.usage_updated = time.time()
-            state.prev_utilization = {
-                w["key"]: w["utilization"] for w in usage["windows"]
-            }
-        return (usage or {}).get("plan")
-    except anthropic_usage.UsageError as exc:
-        # Signed in fine, but the first usage read didn't land; the poller
-        # will retry shortly. Don't treat this as a sign-in failure.
-        with state.lock:
-            state.usage_error = str(exc)
-        return None
-
-
 def apply_push(state, config, payload):
     """Store usage pushed by the companion app. Returns None or raises ValueError.
 
@@ -305,178 +266,6 @@ def apply_push(state, config, payload):
         state.usage = {"windows": clean, "plan": payload.get("plan")}
         state.usage_error = None
         state.usage_updated = time.time()
-
-
-def complete_paste(state, text):
-    """Save credentials pasted from an existing Claude Code login.
-
-    Accepts the whole ~/.claude/.credentials.json ({"claudeAiOauth": {...}})
-    or just the inner object. Bypasses the OAuth exchange entirely, so it
-    works even when the sign-in endpoint is rate-limited. Returns the plan.
-    """
-    try:
-        data = json.loads(text)
-    except (TypeError, ValueError):
-        raise oauth_login.LoginError("That isn't valid JSON. Paste the whole "
-                                     "contents of the credentials file.")
-    oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
-    if oauth is None and isinstance(data, dict) and data.get("accessToken"):
-        oauth = data
-    if not isinstance(oauth, dict) or not oauth.get("accessToken"):
-        raise oauth_login.LoginError("Couldn't find an access token in that "
-                                     "text. Copy the full credentials file.")
-    path = _creds_write_path(state.config)
-    oauth_login.save_credentials(oauth, path)
-    try:
-        usage = anthropic_usage.fetch_usage(path)
-        with state.lock:
-            state.usage = usage
-            state.usage_error = None
-            state.usage_updated = time.time()
-            state.prev_utilization = {
-                w["key"]: w["utilization"] for w in usage["windows"]
-            }
-        return (usage or {}).get("plan")
-    except anthropic_usage.UsageError as exc:
-        with state.lock:
-            state.usage_error = str(exc)
-        return None
-
-
-CONNECT_PAGE = """<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Connect Claude</title>
-<style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body { margin:0; padding:24px 18px 40px; font-family:system-ui,-apple-system,
-    "Segoe UI",sans-serif; background:#f0eee6; color:#3d3929; line-height:1.5; }
-  @media (prefers-color-scheme: dark) {
-    body { background:#262624; color:#f5f4ef; }
-    .card { background:#30302e !important; border-color:rgba(245,244,239,.1) !important; }
-    input { background:#1a1a19 !important; color:#f5f4ef !important;
-      border-color:rgba(245,244,239,.2) !important; }
-    .muted { color:#94907e !important; }
-  }
-  .wrap { max-width:460px; margin:0 auto; }
-  h1 { font-size:1.5rem; margin:0 0 4px; }
-  .muted { color:#8a8478; font-size:.9rem; }
-  .card { background:#faf9f5; border:1px solid rgba(61,57,41,.12);
-    border-radius:14px; padding:18px; margin-top:16px; }
-  .step { font-weight:600; font-size:.8rem; text-transform:uppercase;
-    letter-spacing:.05em; color:#c15f3c; margin-bottom:8px; }
-  .btn { display:block; width:100%; text-align:center; text-decoration:none;
-    background:#d97757; color:#fff; font-weight:600; font-size:1.05rem;
-    padding:14px; border-radius:10px; border:none; cursor:pointer; }
-  .btn:active { filter:brightness(.94); }
-  input { width:100%; padding:12px; font-size:1rem; border-radius:10px;
-    border:1px solid rgba(61,57,41,.25); background:#fff; margin-bottom:12px; }
-  #msg { margin-top:14px; font-size:.95rem; }
-  .ok { color:#0f7b3f; font-weight:600; }
-  .err { color:#c4453d; font-weight:600; }
-  a.back { color:#c15f3c; }
-</style></head>
-<body><div class="wrap">
-  <h1>Connect your Claude account</h1>
-  <p class="muted">Sign in once so the tracker can read your usage limits.
-     You can do this right here on your phone.</p>
-
-  <div class="card">
-    <div class="step">Step 1</div>
-    <a class="btn" id="signin" href="__AUTH_URL__" target="_blank" rel="noopener">
-      Sign in with Claude</a>
-    <p class="muted" style="margin:12px 0 0">Opens claude.ai. After you approve,
-       Claude shows you a code — copy the whole thing.</p>
-  </div>
-
-  <div class="card">
-    <div class="step">Step 2</div>
-    <form id="f" onsubmit="return finish(event)">
-      <input id="code" placeholder="Paste the code here"
-             autocomplete="off" autocapitalize="off" spellcheck="false">
-      <button class="btn" type="submit" id="go">Finish setup</button>
-    </form>
-    <input type="hidden" id="verifier" value="__VERIFIER__">
-    <p class="muted" style="margin:12px 0 0">Codes expire quickly — if it
-       fails, just tap Sign in again for a fresh one.</p>
-    <div id="msg"></div>
-  </div>
-
-  <details class="card" style="margin-top:14px">
-    <summary style="cursor:pointer;font-weight:600">Already use Claude Code? Paste its login instead</summary>
-    <p class="muted" style="margin:8px 0">This skips the sign-in above (handy if
-      it keeps failing). On a computer with Claude Code, open its credentials
-      file and paste the whole thing here:</p>
-    <p class="muted" style="margin:8px 0;font-size:.82rem">
-      macOS: Keychain item <b>Claude Code-credentials</b> ·
-      Linux/WSL: <b>~/.claude/.credentials.json</b> ·
-      Windows: <b>%USERPROFILE%\\.claude\\.credentials.json</b></p>
-    <textarea id="creds" rows="4" placeholder='{"claudeAiOauth": { ... }}'
-      style="width:100%;padding:12px;border-radius:10px;border:1px solid rgba(61,57,41,.25);font-family:monospace;font-size:.85rem"></textarea>
-    <button class="btn" type="button" onclick="pasteCreds()" style="margin-top:10px">Use these credentials</button>
-    <div id="pmsg" style="margin-top:10px;font-weight:600"></div>
-  </details>
-
-  <p class="muted" style="margin-top:18px">
-    <a class="back" href="#" onclick="return startOver()">Start over with a fresh code</a>
-    &nbsp;·&nbsp; <a class="back" href="/">Back to dashboard</a></p>
-</div>
-<script>
-async function pasteCreds(){
-  var t=document.getElementById('creds').value.trim();
-  var m=document.getElementById('pmsg');
-  if(!t){ m.innerHTML='<span class="err">Paste the credentials first.</span>'; return; }
-  m.textContent='Saving…';
-  try{
-    var r=await fetch('/api/paste-creds',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({creds:t})});
-    var d=await r.json();
-    if(d.ok){ m.innerHTML='<span class="ok">Connected!'+(d.plan?(' ('+d.plan+' plan)'):'')+'</span> Redirecting…';
-      setTimeout(function(){location.href='/';},1500); }
-    else{ m.innerHTML='<span class="err">'+d.error+'</span>'; }
-  }catch(e){ m.innerHTML='<span class="err">Could not reach the tracker.</span>'; }
-}
-// Keep the sign-in link + PKCE verifier stable across mobile tab reloads:
-// if we've already started a flow, reuse it instead of the fresh one the
-// server just injected (so the code you got still matches).
-(function(){
-  var link=document.getElementById('signin'), ver=document.getElementById('verifier');
-  var saved=null; try{ saved=JSON.parse(localStorage.getItem('ctp_oauth')||'null'); }catch(e){}
-  if(saved&&saved.url&&saved.ver){ link.href=saved.url; ver.value=saved.ver; }
-  else{ localStorage.setItem('ctp_oauth', JSON.stringify({url:link.href, ver:ver.value})); }
-})();
-function startOver(){ try{localStorage.removeItem('ctp_oauth');}catch(e){} location.reload(); return false; }
-async function finish(e){
-  e.preventDefault();
-  var msg=document.getElementById('msg'), go=document.getElementById('go');
-  var code=document.getElementById('code').value.trim();
-  var verifier=document.getElementById('verifier').value;
-  if(!code){ msg.innerHTML='<span class="err">Paste the code first.</span>'; return false; }
-  go.disabled=true; msg.textContent='Connecting…';
-  try{
-    var r=await fetch('/api/connect',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({code:code,verifier:verifier})});
-    var d=await r.json();
-    if(d.ok){
-      try{localStorage.removeItem('ctp_oauth');}catch(e){}
-      msg.innerHTML='<span class="ok">You\\'re connected!'+
-        (d.plan?(' ('+d.plan+' plan)'):'')+'</span> Redirecting…';
-      setTimeout(function(){location.href='/';},1500);
-    } else {
-      go.disabled=false;
-      msg.innerHTML='<span class="err">'+(d.error||'Sign-in failed.')+'</span>';
-    }
-  }catch(err){
-    go.disabled=false;
-    msg.innerHTML='<span class="err">Could not reach the tracker. Try again.</span>';
-  }
-  return false;
-}
-</script>
-</body></html>"""
 
 
 WIFI_API = "http://127.0.0.1:8079"   # wifi_setup.py's localhost control API
@@ -624,8 +413,8 @@ def make_handler(state, demo):
                 snapshot = demo_snapshot() if demo else state.snapshot()
                 self._send_json(snapshot)
                 return
-            if path == "/connect":
-                self._send_connect_page()
+            if path == "/setup":
+                self._send_file("setup.html")
                 return
             if path == "/wifi":
                 self._send_html(WIFI_PAGE)
@@ -657,12 +446,6 @@ def make_handler(state, demo):
 
         def do_POST(self):
             path = self.path.split("?", 1)[0]
-            if path == "/api/connect":
-                self._handle_connect()
-                return
-            if path == "/api/paste-creds":
-                self._handle_paste()
-                return
             if path == "/api/push":
                 self._handle_push()
                 return
@@ -691,42 +474,6 @@ def make_handler(state, demo):
             self.end_headers()
             self.wfile.write(body)
 
-        def _send_connect_page(self):
-            url, verifier = oauth_login.start_login()
-            with state.lock:
-                state.pending_verifier = verifier
-            body = CONNECT_PAGE.replace(
-                "__AUTH_URL__", html.escape(url, quote=True)
-            ).replace("__VERIFIER__", html.escape(verifier, quote=True))
-            body = body.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def _handle_connect(self):
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            raw = self.rfile.read(length) if length else b"{}"
-            try:
-                data = json.loads(raw.decode("utf-8") or "{}")
-            except ValueError:
-                data = {}
-            if demo:
-                self._send_json({"ok": False,
-                                 "error": "Sign-in is disabled in demo mode."})
-                return
-            try:
-                plan = complete_login(state, data.get("code", ""),
-                                      data.get("verifier"))
-                self._send_json({"ok": True, "plan": plan})
-            except oauth_login.LoginError as exc:
-                self._send_json({"ok": False, "error": str(exc)})
-            except Exception as exc:  # never crash the handler
-                self._send_json({"ok": False,
-                                 "error": f"Unexpected error: {exc}"})
-
         def _handle_push(self):
             length = int(self.headers.get("Content-Length", 0) or 0)
             raw = self.rfile.read(length) if length else b"{}"
@@ -742,26 +489,6 @@ def make_handler(state, demo):
                 self._send_json({"ok": False, "error": str(exc)}, code=400)
             except Exception as exc:
                 self._send_json({"ok": False, "error": f"error: {exc}"}, code=500)
-
-        def _handle_paste(self):
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            raw = self.rfile.read(length) if length else b"{}"
-            try:
-                data = json.loads(raw.decode("utf-8") or "{}")
-            except ValueError:
-                data = {}
-            if demo:
-                self._send_json({"ok": False,
-                                 "error": "Disabled in demo mode."})
-                return
-            try:
-                plan = complete_paste(state, data.get("creds", ""))
-                self._send_json({"ok": True, "plan": plan})
-            except oauth_login.LoginError as exc:
-                self._send_json({"ok": False, "error": str(exc)})
-            except Exception as exc:
-                self._send_json({"ok": False,
-                                 "error": f"Unexpected error: {exc}"})
 
         def _send_json(self, payload, code=200):
             body = json.dumps(payload).encode("utf-8")

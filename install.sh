@@ -83,14 +83,16 @@ sudo systemctl enable --now $SERVICE
 sudo systemctl start $SERVICE-wifi 2>/dev/null || true
 
 HOST=$(hostname)
+IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 echo
-echo "Done! Dashboard: http://$HOST.local:$PORT  (or http://$(hostname -I 2>/dev/null | awk '{print $1}'):$PORT)"
+echo "Done! Dashboard: http://$HOST.local:$PORT  (or http://$IP:$PORT)"
 echo
-if [ ! -f "$HOME/.claude-tracker/credentials.json" ] && [ ! -f "$HOME/.claude/.credentials.json" ]; then
-  echo "Next step: send your Claude credentials to this Pi. On the computer"
-  echo "where you use Claude Code, run:"
-  echo
-  echo "  ./scripts/send-credentials.sh $RUN_USER@$HOST.local"
-  echo
-fi
+echo "Next step: connect it to your Claude usage. On the computer where you"
+echo "use Claude Code, open the setup page and download the companion app:"
+echo
+echo "  http://$IP:$PORT/setup"
+echo
+echo "(or scan the QR code shown on the tracker's own screen). Double-click"
+echo "the download and it finds this tracker by itself."
+echo
 echo "Logs: journalctl -u $SERVICE -f"

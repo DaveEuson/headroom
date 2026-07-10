@@ -28,15 +28,22 @@ sudo reboot
 HAT screen), and sets up the `claude-tracker` service to start on boot.
 The reboot makes sure SPI is live. It prints your dashboard URL — note it.
 
-## 3. Send your Claude credentials
+## 3. Start the companion on your computer
 
-On the **computer where you use Claude Code** (not the Pi), get this repo
-and run the helper (works on macOS + Linux):
+The Pi doesn't sign in itself — a small companion on the computer where you
+already use Claude Code reuses that login, reads your real usage, and pushes it
+to the Pi. Until it connects, the Pi's screen shows a **setup QR code**.
+
+Scan that QR (or browse to `http://raspberrypi.local:8080/setup`) and download
+the companion for your OS, then double-click it. It auto-discovers the tracker,
+sends the first reading, and installs itself to run at every login.
+
+Prefer the script? On the **computer where you use Claude Code** (not the Pi):
 
 ```bash
 git clone -b claude/pi-usage-tracker-6mnamz https://github.com/DaveEuson/ClaudeTrackerPi.git
 cd ClaudeTrackerPi
-./scripts/send-credentials.sh pi@raspberrypi.local
+python3 companion/companion.py
 ```
 
 Within a minute or two the meters go live.
@@ -66,8 +73,8 @@ sudo systemctl restart claude-tracker
 
 | Symptom | Fix |
 |---|---|
-| Banner: "No Claude credentials found" | Re-run step 3 |
-| Banner: "sign-in expired" | Re-run step 3 (refreshes the token) |
+| Banner: "Waiting for the companion" | Start the companion (step 3); confirm Claude Code is logged in on that computer |
+| Companion can't find the Pi | Pass `--pi http://raspberrypi.local:8080` (or the IP `install.sh` printed) |
 | Battery tile missing | Install PiSugar power manager: `wget https://cdn.pisugar.com/release/pisugar-power-manager.sh -O - \| sudo bash` |
 | HAT screen stays black | Confirm SPI is on (`ls /dev/spidev*` should list a device); make sure PiSugar's own Whisplay demo/daemon isn't running (two programs can't share the screen) |
 | HAT image shifted ~20px, mirrored, or colors inverted | Cosmetic init tweak — note exactly what you see and it's a one-line change in `app/display.py` |

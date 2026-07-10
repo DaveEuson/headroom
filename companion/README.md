@@ -19,9 +19,26 @@ usage from Claude Code's local logs (`~/.claude/projects`).
 
 ## Setup
 
+### Easiest: the double-click app (no Python)
+
+Scan the QR code on the tracker's screen — or open
+`http://<tracker-address>:8080/setup` — and download the companion for your OS
+from the [latest release]. Double-click it. Done.
+
+[latest release]: https://github.com/DaveEuson/ClaudeTrackerPi/releases/latest
+
+On first run it **finds the tracker on your network by itself**, sends the first
+reading, and **sets itself to run at every login** — so you do this once and
+never again. (First launch: macOS → right-click → **Open**; Windows → **More
+info → Run anyway**, since the binary isn't code-signed yet.)
+
+These apps are produced automatically by CI on every tagged release
+(see [BUILD.md](BUILD.md) and `.github/workflows/release.yml`).
+
+### Or run the script
+
 You need Python 3 (already on macOS/Linux; on Windows install from
 [python.org](https://www.python.org/downloads/) and tick "Add to PATH").
-*(Want a no-Python double-click app for end users? See [BUILD.md](BUILD.md).)*
 
 1. Copy this `companion/` folder to the computer where you run Claude Code
    (or clone the repo there).
@@ -31,9 +48,8 @@ You need Python 3 (already on macOS/Linux; on Windows install from
    python3 companion.py
    ```
 
-That's it. With no arguments it **finds the tracker on your network by itself**,
-starts feeding it, and **sets itself to run at every login** — so you do this
-once and never again. (If auto-discovery can't find it, pass
+Same behavior: auto-discovers the tracker, feeds it, and installs itself to run
+at login. (If auto-discovery can't find it, pass
 `--pi http://<its-address>:8080`, shown on the tracker screen.)
 
 - Stop it auto-running: `python3 companion.py --uninstall`

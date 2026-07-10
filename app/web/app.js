@@ -197,12 +197,12 @@ function render(data) {
   if (data.usage_error) {
     const noWindows = !(data.windows && data.windows.length);
     const needsSetup = noWindows &&
-      /credential|sign-?in|log ?in|access token|not connected/i.test(data.usage_error);
+      /credential|sign-?in|log ?in|access token|not connected|companion|waiting/i.test(data.usage_error);
     if (needsSetup) {
       banner.classList.add("setup");
       banner.innerHTML =
-        '<span>Not connected to Claude yet.</span>' +
-        '<a class="connect-btn" href="/connect">Sign in with Claude →</a>';
+        '<span>Not connected to Claude yet — run the companion app on your computer.</span>' +
+        '<a class="connect-btn" href="/setup">Set up →</a>';
     } else {
       banner.classList.remove("setup");
       banner.textContent = data.usage_error;

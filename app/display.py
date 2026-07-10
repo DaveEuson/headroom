@@ -333,15 +333,15 @@ def _lan_ip():
         return None
 
 
-def _local_url(config):
+def _local_url(config, path=""):
     """URL of this Pi's dashboard, for the setup QR code."""
     port = int((config or {}).get("port", 8080))
     ip = _lan_ip()
     if ip:
-        return f"http://{ip}:{port}"
+        return f"http://{ip}:{port}{path}"
     import socket
     try:
-        return f"http://{socket.gethostname()}.local:{port}"
+        return f"http://{socket.gethostname()}.local:{port}{path}"
     except OSError:
         return None
 
@@ -535,11 +535,11 @@ def run(snapshot_fn, config):
         return
     fonts = _load_fonts()
     sprites = _load_sprites()
-    setup_url = _local_url(config)
+    setup_url = _local_url(config, "/setup")
     frame = 0
     while True:
         if frame % 60 == 0:  # refresh in case the IP changed / came up late
-            setup_url = _local_url(config) or setup_url
+            setup_url = _local_url(config, "/setup") or setup_url
         try:
             panel.show(render(snapshot_fn(), frame, fonts, sprites, setup_url))
         except Exception as exc:

@@ -60,21 +60,24 @@ cd ClaudeTrackerPi
 That creates a `claude-tracker` systemd service that starts on boot. The
 installer prints your dashboard URL, e.g. `http://raspberrypi.local:8080`.
 
-### 2. Run the companion on your computer
+### 2. Install the companion on your computer
 
 The Pi can't sign in directly (Anthropic throttles fresh third-party logins).
-Instead, a tiny **companion script** runs on the computer where you already use
+Instead, a tiny **companion app** runs on the computer where you already use
 Claude Code, reuses that existing login to read your real usage numbers, and
 pushes them to the Pi. No new sign-in, so it never hits the throttle.
 
-On that computer (needs Python 3):
+Until it's connected, the tracker's screen shows a **QR code**. Scan it (or open
+`http://<tracker-address>:8080/setup`) to reach a page with one-click downloads
+for **Windows, macOS, and Linux**. Download the one for your computer and
+double-click it — it **finds the tracker on your network by itself**, sends the
+first reading, and **sets itself to run at every login**. Nothing to type.
 
-```bash
-python3 companion/companion.py --pi http://claudecounter.local:8080
-```
+> Prefer the script? With Python 3 installed, run
+> `python3 companion/companion.py` — same auto-discovery, no download.
 
-Leave it running and the meters go live. Full details, auto-start on
-boot, and how to tune the limits: **[companion/README.md](companion/README.md)**.
+Full details, tuning, and how the double-click apps are built:
+**[companion/README.md](companion/README.md)**.
 
 ### Moving the Pi to a new network?
 
