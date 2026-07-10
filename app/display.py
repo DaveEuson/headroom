@@ -17,7 +17,7 @@ import time
 
 SPRITE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "web", "img", "pip")
-SPRITE_BOX = (150, 92)   # sprites are scaled to fit this area on the LCD
+SPRITE_BOX = (150, 76)   # sprites are scaled to fit this area on the LCD
 
 WIDTH, HEIGHT = 240, 280
 Y_OFFSET = 20            # the 240x280 panel sits 20 rows into 240x320 RAM
@@ -467,7 +467,7 @@ def _render_setup(theme, fonts, url):
 
 
 def _draw_header(draw, snapshot, theme, fonts):
-    """Clock (left), battery (right), Wi-Fi name under it. Shared by screens."""
+    """Clock (left) + battery (right). Wi-Fi lives in the footer now."""
     clock = time.strftime("%I:%M %p").lstrip("0")
     draw.text((10, 6), clock, font=fonts["clock"], fill=theme["ink"])
     battery = snapshot.get("battery")
@@ -481,18 +481,23 @@ def _draw_header(draw, snapshot, theme, fonts):
         draw.rounded_rectangle((186, 30, 230, 37), 3, fill=theme["accent_track"])
         draw.rounded_rectangle((186, 30, 186 + max(3, int(44 * pct / 100)),
                                 37), 3, fill=color)
+
+
+def _draw_wifi_footer(draw, snapshot, theme, fonts):
+    """Signal bars + network name, centered along the very bottom."""
     ssid = (snapshot.get("wifi") or {}).get("ssid")
-    if ssid:
-        label = str(ssid)[:16]
-        lw = draw.textlength(label, font=fonts["small"])
-        y0 = 44 if battery else 10
-        bx = 230 - lw - 11  # 3 signal bars before the name
-        for i in range(3):
-            bh = 3 + i * 2
-            draw.rectangle((bx + i * 3, y0 + 9 - bh, bx + i * 3 + 2, y0 + 9),
-                           fill=theme["muted"])
-        draw.text((230 - lw, y0), label, font=fonts["small"],
-                  fill=theme["muted"])
+    if not ssid:
+        return
+    label = str(ssid)[:20]
+    lw = draw.textlength(label, font=fonts["small"])
+    total = 11 + lw          # 3 signal bars (~8px) + gap + name
+    bx = int((WIDTH - total) / 2)
+    y = 264
+    for i in range(3):
+        bh = 3 + i * 2
+        draw.rectangle((bx + i * 3, y + 9 - bh, bx + i * 3 + 2, y + 9),
+                       fill=theme["muted"])
+    draw.text((bx + 11, y), label, font=fonts["small"], fill=theme["muted"])
 
 
 def _draw_mascot(img, draw, mood, frame, theme, sprites):
@@ -500,7 +505,7 @@ def _draw_mascot(img, draw, mood, frame, theme, sprites):
     if sprite:
         bounce = -3 if (mood in ("happy", "panic") and frame % 2) else 0
         img.paste(sprite, (120 - sprite.width // 2,
-                           92 - sprite.height // 2 + bounce), sprite)
+                           80 - sprite.height // 2 + bounce), sprite)
     else:
         _draw_pip(draw, mood, frame, theme)
 
@@ -531,7 +536,8 @@ def _render_maxed(theme, fonts, snapshot, frame, sprites):
         if len(parts) == 2:
             break
     if parts:
-        _center(draw, "   ".join(parts), 252, fonts["small"], theme["muted"])
+        _center(draw, "   ".join(parts), 246, fonts["small"], theme["muted"])
+    _draw_wifi_footer(draw, snapshot, theme, fonts)
     return img
 
 
@@ -560,7 +566,7 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
 
     # meters (first three windows) or the error banner
     windows = (snapshot.get("windows") or [])[:3]
-    y = 134
+    y = 122
     if error:
         words, line, lines = str(error).split(), "", []
         for word in words:
@@ -597,6 +603,7 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
         draw.text((12, y + 31), _reset_text(w.get("resets_at")),
                   font=fonts["small"], fill=theme["muted"])
         y += 48
+    _draw_wifi_footer(draw, snapshot, theme, fonts)
     return img
 
 
