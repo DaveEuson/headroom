@@ -19,7 +19,7 @@ MESSAGES = {
             "You're out of session usage — it will reset soon."),
     "restored": ("Claude usage restored",
                  "Your Claude session has reset — you're good to go."),
-    "test": ("ClaudeTracker test alert",
+    "test": ("Headroom test alert",
              "Alerts are working — you'll be pinged when you run out or "
              "recover."),
 }

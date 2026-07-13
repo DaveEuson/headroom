@@ -1,4 +1,4 @@
-# ClaudeTrackerPi
+# Headroom
 
 A tiny always-on dashboard for your **Claude usage limits**, built for a
 **Raspberry Pi Zero 2 W** with a **PiSugar** battery. Glance at it and know
@@ -43,7 +43,7 @@ used right now — no terminal, no menubar, no estimating.
   `claude /usage` shows) and pushes them to the Pi — no sign-in, so it never
   hits the throttle that blocks fresh third-party logins
 - **Wi-Fi setup hotspot** — plug it in somewhere new and it can't find a
-  network? It becomes its own Wi-Fi (`ClaudeTracker-Setup`) and shows a
+  network? It becomes its own Wi-Fi (`Headroom-Setup`) and shows a
   scan-to-join QR; a setup page pops up on your phone where you pick your
   home network
 - **Pip.** The tracker's mascot: a little retro computer. Between sessions
@@ -107,12 +107,12 @@ power-on to live meters is about five minutes:
 ### 1. On the Pi
 
 ```bash
-git clone https://github.com/DaveEuson/ClaudeTrackerPi.git
-cd ClaudeTrackerPi
+git clone https://github.com/DaveEuson/Headroom.git
+cd Headroom
 ./install.sh
 ```
 
-That creates a `claude-tracker` systemd service that starts on boot. The
+That creates a `headroom` systemd service that starts on boot. The
 installer prints your dashboard URL, e.g. `http://raspberrypi.local:8080`.
 
 > **Set the timezone** so the clock and reset countdowns are right:
@@ -143,7 +143,7 @@ Full details, tuning, and how the double-click apps are built:
 
 If the Pi boots and can't find a known Wi-Fi network for ~45 seconds, the
 screen switches to **Wi-Fi setup**: scan the QR to join its
-`ClaudeTracker-Setup` hotspot, and a page opens on your phone to pick your
+`Headroom-Setup` hotspot, and a page opens on your phone to pick your
 network and enter the password. Once it hops over, the dashboard takes over.
 (Requires NetworkManager — standard on Raspberry Pi OS.)
 
@@ -187,9 +187,11 @@ Open **`http://<your-pi>:8080/settings`** (or tap *Settings* in the dashboard
 footer). Changes save to the Pi instantly and apply to both the screen and the
 web dashboard:
 
-- **Appearance** — theme (auto / always light / always dark), 24-hour clock,
-  screen **brightness**, and **dim at night**.
-- **Usage history on screen** — toggle the rotating trend graph on the LCD.
+- **Appearance** — theme (auto / always light / always dark), meters showing
+  **% left or % used**, 24-hour clock, screen **brightness**, **dim at night**,
+  and the **retro CRT scanlines**.
+- **Usage history on screen** — toggle the rotating trend graph on the LCD, and
+  set how often the **phone QR** appears (or turn it off).
 - **Alerts** — a **speaker beep** and/or a **phone push** when you run out of
   session usage and when it's restored:
   - **ntfy** (recommended, free, no account): pick a hard-to-guess topic and
@@ -259,8 +261,8 @@ sheet into individual transparent sprites for you.
 ## Troubleshooting
 
 ```bash
-journalctl -u claude-tracker -f    # live logs
-systemctl restart claude-tracker   # restart after editing config.json
+journalctl -u headroom -f    # live logs
+systemctl restart headroom   # restart after editing config.json
 ```
 
 The dashboard itself surfaces the most common problems (no credentials yet,

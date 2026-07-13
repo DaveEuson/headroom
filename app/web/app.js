@@ -1,4 +1,4 @@
-/* ClaudeTrackerPi dashboard logic — meters show usage LEFT (fuel-gauge style). */
+/* Headroom dashboard logic — meters show usage LEFT (fuel-gauge style). */
 
 const POLL_MS = 30000;
 

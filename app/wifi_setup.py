@@ -1,10 +1,10 @@
-"""Wi-Fi manager for ClaudeTrackerPi (runs as root, needs NetworkManager).
+"""Wi-Fi manager for Headroom (runs as root, needs NetworkManager).
 
 Two jobs:
 
 1. **Setup hotspot.** On boot with no network (or if the network drops for
    a while), scan nearby networks, start a WPA2 hotspot
-   "ClaudeTracker-Setup", and serve a captive portal on http://10.42.0.1
+   "Headroom-Setup", and serve a captive portal on http://10.42.0.1
    where the user picks their home network. While in hotspot mode we
    periodically drop the hotspot to see if a known network came back.
 
@@ -14,7 +14,7 @@ Two jobs:
        GET  /status   -> {"phase": ..., "error": ..., "current": ...}
        POST /join     {"ssid": ..., "password": ...} -> {"ok": true}
 
-State for the HAT display is written to /run/claude-tracker/wifi.json.
+State for the HAT display is written to /run/headroom/wifi.json.
 Standard library + nmcli only.
 """
 
@@ -29,7 +29,7 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-HOTSPOT_SSID = "ClaudeTracker-Setup"
+HOTSPOT_SSID = "Headroom-Setup"
 HOTSPOT_PSK = "claudepi"          # printed on the device screen
 HOTSPOT_CON = "ctp-hotspot"
 PORTAL_IP = "10.42.0.1"           # NetworkManager's shared-mode gateway
@@ -40,7 +40,7 @@ RECONNECT_GRACE = 300             # known wifi just down -> be patient first
 RECHECK_HOTSPOT = 120             # while hosting: retry known networks
 JOIN_TIMEOUT = 60
 
-STATE_DIR = "/run/claude-tracker"
+STATE_DIR = "/run/headroom"
 STATE_FILE = os.path.join(STATE_DIR, "wifi.json")
 
 PROBE_PATHS = {
@@ -233,7 +233,7 @@ def join_network(ssid, password, rescue_hotspot):
 PORTAL_PAGE = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ClaudeTracker Wi-Fi setup</title>
+<title>Headroom Wi-Fi setup</title>
 <style>
  * { box-sizing:border-box; }
  body { margin:0; padding:24px 18px 40px; font-family:system-ui,-apple-system,
@@ -278,7 +278,7 @@ JOINING_PAGE = """<!DOCTYPE html>
 <title>Connecting…</title></head>
 <body style="font-family:system-ui;padding:32px 20px;background:#f0eee6;color:#3d3929">
 <h2>Connecting to __SSID__…</h2>
-<p>The <b>ClaudeTracker-Setup</b> network will now disappear.</p>
+<p>The <b>Headroom-Setup</b> network will now disappear.</p>
 <p><b>Watch the tracker's screen:</b> if it shows a QR code for
 "Set me up", it's online — reconnect your phone to your own Wi-Fi and scan it.
 If the setup network comes back instead, the password didn't work — rejoin it
@@ -301,7 +301,7 @@ def _network_rows():
 
 def make_portal_handler():
     class Portal(BaseHTTPRequestHandler):
-        server_version = "ClaudeTrackerSetup/1.0"
+        server_version = "HeadroomSetup/1.0"
 
         def _page(self, body, code=200):
             data = body.encode("utf-8")
@@ -398,7 +398,7 @@ def run_hotspot_mode():
 
 def make_control_handler():
     class Control(BaseHTTPRequestHandler):
-        server_version = "ClaudeTrackerWifi/1.0"
+        server_version = "HeadroomWifi/1.0"
 
         def _json(self, payload, code=200):
             data = json.dumps(payload).encode("utf-8")

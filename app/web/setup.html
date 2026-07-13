@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Set up your Claude Tracker</title>
+<title>Set up your Headroom</title>
 <style>
   :root { color-scheme: light dark; --accent:#d97757; }
   * { box-sizing: border-box; }
@@ -55,7 +55,7 @@
 </style>
 </head><body>
 <div class="wrap">
-  <h1>Set up your Claude Tracker</h1>
+  <h1>Set up your Headroom</h1>
   <p class="muted">One small app on the computer where you use Claude Code keeps
     this tracker fed with your real usage. Install it once and forget it.</p>
 
@@ -100,12 +100,12 @@
 </div>
 
 <script>
-  var REPO = "https://github.com/DaveEuson/ClaudeTrackerPi";
+  var REPO = "https://github.com/DaveEuson/Headroom";
   var BASE = REPO + "/releases/latest/download/";
   var TARGETS = [
-    { id:"windows", label:"Windows", file:"ClaudeTrackerCompanion-windows.exe", hint:".exe · double-click" },
-    { id:"macos",   label:"macOS",   file:"ClaudeTrackerCompanion-macos",       hint:"Apple Silicon & Intel" },
-    { id:"linux",   label:"Linux",   file:"ClaudeTrackerCompanion-linux",       hint:"x86-64 binary" }
+    { id:"windows", label:"Windows", file:"HeadroomCompanion-windows.exe", hint:".exe · double-click" },
+    { id:"macos",   label:"macOS",   file:"HeadroomCompanion-macos",       hint:"Apple Silicon & Intel" },
+    { id:"linux",   label:"Linux",   file:"HeadroomCompanion-linux",       hint:"x86-64 binary" }
   ];
   function isMobile() {
     return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || "");

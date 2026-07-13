@@ -58,7 +58,7 @@ def find_credentials_path(configured=None):
     if configured:
         candidates.append(os.path.expanduser(configured))
     candidates += [
-        os.path.expanduser("~/.claude-tracker/credentials.json"),
+        os.path.expanduser("~/.headroom/credentials.json"),
         os.path.expanduser("~/.claude/.credentials.json"),
     ]
     for path in candidates:
