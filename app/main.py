@@ -43,9 +43,11 @@ DEFAULT_CONFIG = {
     "push_token": "",         # optional shared secret the companion must send
     "theme": "auto",          # "auto" (day/night by schedule), "light", "dark"
     "clock_24h": False,       # 24-hour time instead of AM/PM
+    "meter_mode": "left",     # "left" (usage remaining) or "used"
     "brightness": 100,        # LCD backlight 0-100 (dims with PWM; on/off else)
     "night_dim": True,        # dim the LCD during the night window
     "lcd_history": True,      # rotate a usage-history graph onto the LCD
+    "qr_interval": 60,        # seconds between phone-QR appearances (0 = off)
     "audio_alerts": False,    # beep on out-of-credits / restored (off default)
     "push_service": "none",   # "none" | "ntfy" | "pushover"
     "ntfy_topic": "",         # your ntfy.sh topic
@@ -56,6 +58,16 @@ DEFAULT_CONFIG = {
 # How long after the last observed usage increase we still call the
 # session "active" (Pip keeps dancing between messages).
 ACTIVE_SECONDS = 900
+
+# Reject request bodies larger than this (a Pi Zero has little RAM).
+MAX_BODY = 262144
+
+
+def _safe_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -85,13 +97,17 @@ def load_config():
     return config
 
 
+def _atomic_write_json(path, data):
+    """Write JSON atomically via a per-thread temp file (no concurrent clobber)."""
+    tmp = f"{path}.{threading.get_ident()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+    os.replace(tmp, path)
+
+
 def save_config(config):
     """Persist the full effective config so settings survive a restart."""
-    path = config_path()
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(config, fh, indent=2)
-    os.replace(tmp, path)
+    _atomic_write_json(config_path(), config)
 
 
 # Usage history: a small per-window ring buffer of [epoch, utilization] points,
@@ -99,6 +115,7 @@ def save_config(config):
 # roughly the last 6 hours.
 HISTORY_CAP = 180
 HISTORY_MIN_GAP = 90          # seconds; coalesce points closer than this
+HISTORY_MAX_KEYS = 12         # bound distinct windows we retain history for
 
 
 def history_path():
@@ -120,11 +137,7 @@ def load_history():
 
 def save_history(history):
     try:
-        path = history_path()
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(history, fh)
-        os.replace(tmp, path)
+        _atomic_write_json(history_path(), history)
     except OSError:
         pass
 
@@ -143,12 +156,26 @@ def record_history(state, windows, now):
             series.append(point)
         if len(series) > HISTORY_CAP:
             del series[:-HISTORY_CAP]
+    # bound the number of distinct windows: drop the least-recently-updated
+    if len(state.history) > HISTORY_MAX_KEYS:
+        stale = sorted(state.history,
+                       key=lambda k: state.history[k][-1][0]
+                       if state.history[k] else 0)
+        for k in stale[:len(state.history) - HISTORY_MAX_KEYS]:
+            del state.history[k]
 
 
 # Settings the /settings page may change, each with a validator/normalizer.
 def _clamp_brightness(v):
     try:
         return max(10, min(100, int(round(float(v)))))
+    except (TypeError, ValueError):
+        return None
+
+
+def _clamp_qr(v):
+    try:
+        return max(0, min(3600, int(round(float(v)))))
     except (TypeError, ValueError):
         return None
 
@@ -161,9 +188,11 @@ SECRET_MASK = "••••••"
 SETTINGS_FIELDS = {
     "theme": lambda v: v if v in ("auto", "light", "dark") else None,
     "clock_24h": lambda v: bool(v),
+    "meter_mode": lambda v: v if v in ("left", "used") else None,
     "brightness": _clamp_brightness,
     "night_dim": lambda v: bool(v),
     "lcd_history": lambda v: bool(v),
+    "qr_interval": _clamp_qr,
     "audio_alerts": lambda v: bool(v),
     "push_service": lambda v: v if v in ("none", "ntfy", "pushover") else None,
     "ntfy_topic": lambda v: str(v)[:80],
@@ -188,7 +217,8 @@ def apply_settings(state, payload):
         applied[key] = value
     with state.lock:
         state.config.update(applied)   # same dict the display + snapshot read
-    save_config(state.config)
+        config_copy = dict(state.config)
+    save_config(config_copy)           # serialize a copy, not the live dict
     return applied
 
 
@@ -229,9 +259,11 @@ class State:
                 },
                 "theme": self.config.get("theme", "auto"),
                 "clock_24h": bool(self.config.get("clock_24h", False)),
-                "brightness": self.config.get("brightness", 100),
+                "meter_mode": self.config.get("meter_mode", "left"),
+                "brightness": _safe_int(self.config.get("brightness"), 100),
                 "night_dim": bool(self.config.get("night_dim", True)),
                 "lcd_history": bool(self.config.get("lcd_history", True)),
+                "qr_interval": _safe_int(self.config.get("qr_interval"), 60),
                 "history": {k: list(v) for k, v in self.history.items()},
                 "server_time": time.time(),
             }
@@ -266,9 +298,11 @@ def demo_snapshot():
         "night": {"start": "22:00", "end": "07:00"},
         "theme": "auto",
         "clock_24h": False,
+        "meter_mode": "left",
         "brightness": 100,
         "night_dim": True,
         "lcd_history": True,
+        "qr_interval": 60,
         "history": _demo_history(t, session, weekly, opus),
         "server_time": t,
     }
@@ -640,6 +674,13 @@ SETTINGS_PAGE = """<!DOCTYPE html>
       </select>
     </div>
     <div class="row">
+      <div class="lab">Meters show<small>How much is left, or how much is used</small></div>
+      <select id="meter_mode">
+        <option value="left">% left</option>
+        <option value="used">% used</option>
+      </select>
+    </div>
+    <div class="row">
       <div class="lab">24-hour clock<small>Show 18:30 instead of 6:30 PM</small></div>
       <label class="sw"><input type="checkbox" id="clock_24h"><span></span></label>
     </div>
@@ -655,6 +696,15 @@ SETTINGS_PAGE = """<!DOCTYPE html>
     <div class="row">
       <div class="lab">Usage history on screen<small>Rotate a trend graph onto the LCD</small></div>
       <label class="sw"><input type="checkbox" id="lcd_history"><span></span></label>
+    </div>
+    <div class="row">
+      <div class="lab">Phone QR on screen<small>How often the scan-me QR appears</small></div>
+      <select id="qr_interval">
+        <option value="0">Off</option>
+        <option value="60">Every ~1 min</option>
+        <option value="120">Every ~2 min</option>
+        <option value="300">Every ~5 min</option>
+      </select>
     </div>
   </div>
 
@@ -708,11 +758,13 @@ SETTINGS_PAGE = """<!DOCTYPE html>
     try {
       var s = await (await fetch("/api/settings")).json();
       document.getElementById("theme").value = s.theme || "auto";
+      document.getElementById("meter_mode").value = s.meter_mode || "left";
       document.getElementById("clock_24h").checked = !!s.clock_24h;
       document.getElementById("brightness").value = s.brightness || 100;
       document.getElementById("brightval").textContent = (s.brightness || 100) + "%";
       document.getElementById("night_dim").checked = !!s.night_dim;
       document.getElementById("lcd_history").checked = !!s.lcd_history;
+      document.getElementById("qr_interval").value = String(s.qr_interval != null ? s.qr_interval : 60);
       document.getElementById("audio_alerts").checked = !!s.audio_alerts;
       document.getElementById("push_service").value = s.push_service || "none";
       document.getElementById("ntfy_topic").value = s.ntfy_topic || "";
@@ -732,8 +784,14 @@ SETTINGS_PAGE = """<!DOCTYPE html>
   document.getElementById("theme").addEventListener("change", function(e){
     save({ theme: e.target.value });
   });
+  document.getElementById("meter_mode").addEventListener("change", function(e){
+    save({ meter_mode: e.target.value });
+  });
   document.getElementById("clock_24h").addEventListener("change", function(e){
     save({ clock_24h: e.target.checked });
+  });
+  document.getElementById("qr_interval").addEventListener("change", function(e){
+    save({ qr_interval: parseInt(e.target.value, 10) });
   });
   document.getElementById("brightness").addEventListener("input", function(e){
     document.getElementById("brightval").textContent = e.target.value + "%";
@@ -833,8 +891,9 @@ def make_handler(state, demo):
                 self._handle_push()
                 return
             if path == "/api/settings":
-                length = int(self.headers.get("Content-Length", 0) or 0)
-                raw = self.rfile.read(length) if length else b"{}"
+                raw = self._read_body()
+                if raw is None:
+                    return
                 try:
                     payload = json.loads(raw.decode("utf-8") or "{}")
                     applied = apply_settings(state, payload)
@@ -847,8 +906,9 @@ def make_handler(state, demo):
                 self._send_json({"ok": True, **result})
                 return
             if path == "/api/wifi/join":
-                length = int(self.headers.get("Content-Length", 0) or 0)
-                raw = self.rfile.read(length) if length else b"{}"
+                raw = self._read_body()
+                if raw is None:
+                    return
                 if demo:
                     self._send_json({"ok": False,
                                      "error": "Disabled in demo mode."})
@@ -862,6 +922,15 @@ def make_handler(state, demo):
                 return
             self.send_error(404)
 
+        def _read_body(self):
+            """Read a bounded request body, or None (after replying 413)."""
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            if length > MAX_BODY:
+                self._send_json({"ok": False, "error": "request too large"},
+                                code=413)
+                return None
+            return self.rfile.read(length) if length else b"{}"
+
         def _send_html(self, text):
             body = text.encode("utf-8")
             self.send_response(200)
@@ -872,8 +941,9 @@ def make_handler(state, demo):
             self.wfile.write(body)
 
         def _handle_push(self):
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            raw = self.rfile.read(length) if length else b"{}"
+            raw = self._read_body()
+            if raw is None:
+                return
             token = state.config.get("push_token") or ""
             if token and self.headers.get("X-Push-Token") != token:
                 self._send_json({"ok": False, "error": "bad push token"}, code=403)

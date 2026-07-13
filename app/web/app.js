@@ -6,6 +6,7 @@ let latest = null; // last /api/status payload
 let night = { start: "22:00", end: "07:00" }; // overwritten from server config
 let themePref = "auto"; // "auto" | "light" | "dark" — from settings
 let clock24h = false;   // 24-hour time — from settings
+let meterMode = "left"; // "left" (usage remaining) | "used" — from settings
 
 // ?night=1 / ?night=0 forces night/day, ?active=1 / ?active=0 forces the
 // session-detected state (both handy for testing)
@@ -74,14 +75,15 @@ function fmtClock(date) {
   return date.toLocaleString([], opts);
 }
 
-// A tiny SVG sparkline of "% left" over time (declining = burning down).
+// A tiny SVG sparkline over time. In "left" mode it declines as you burn
+// down; in "used" mode it rises as usage climbs.
 function sparkSVG(series) {
   if (!Array.isArray(series) || series.length < 2) return "";
   const W = 100, H = 22, n = series.length;
   const pts = series.map((p, i) => {
-    const left = Math.max(0, Math.min(100, 100 - p[1]));
+    const v = Math.max(0, Math.min(100, meterMode === "used" ? p[1] : 100 - p[1]));
     const x = (i / (n - 1)) * W;
-    const y = H - (left / 100) * H;
+    const y = H - (v / 100) * H;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
   const line = pts.join(" ");
@@ -101,19 +103,21 @@ function renderMeters(windows) {
   const hist = (latest && latest.history) || {};
   for (const w of windows) {
     const remaining = Math.max(0, Math.min(100, 100 - w.utilization));
-    const sev = severity(remaining);
+    const used = Math.max(0, Math.min(100, w.utilization));
+    const sev = severity(remaining);   // danger = little left, in either mode
+    const value = meterMode === "used" ? used : remaining;
+    const suffix = meterMode === "used" ? "used" : "left";
     const row = document.createElement("div");
     row.className = "window" + (sev === "ok" ? "" : " " + sev);
     row.dataset.resetsAt = w.resets_at || "";
 
-    const shown = remaining < 1 && remaining > 0 ? remaining.toFixed(1)
-                                                 : Math.round(remaining);
+    const shown = value < 1 && value > 0 ? value.toFixed(1) : Math.round(value);
     row.innerHTML = `
       <div class="win-head">
         <span class="win-label"></span>
-        <span class="win-value">${shown}<span class="unit">% left</span></span>
+        <span class="win-value">${shown}<span class="unit">% ${suffix}</span></span>
       </div>
-      <div class="meter"><div class="fill" style="width:${remaining}%"></div></div>
+      <div class="meter"><div class="fill" style="width:${value}%"></div></div>
       ${sparkSVG(hist[w.key])}
       <div class="win-foot">
         <span class="reset"></span>
@@ -247,6 +251,10 @@ function render(data) {
   if (data.night) night = data.night;
   if (data.theme) themePref = data.theme;
   clock24h = !!data.clock_24h;
+  if (data.meter_mode) meterMode = data.meter_mode;
+  const hint = el("bar-hint");
+  if (hint) hint.textContent = meterMode === "used"
+    ? "Higher bar = more usage used" : "Higher bar = more usage left";
 
   const wifiLink = el("wifi-link");
   if (wifiLink) {

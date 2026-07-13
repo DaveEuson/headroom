@@ -231,6 +231,15 @@ def _target_brightness(snapshot):
     return b / 100.0
 
 
+def _meter_view(util, mode):
+    """(value, suffix, bar-fill %) for showing '% left' vs '% used'."""
+    if mode == "used":
+        used = max(0.0, min(100.0, util))
+        return used, "used", used
+    remaining = max(0.0, min(100.0, 100.0 - util))
+    return remaining, "left", remaining
+
+
 def _theme_for(snapshot, night):
     """Colors follow the 'theme' setting; 'auto' tracks the day/night schedule.
     (This is separate from `night`, which decides whether the mascot sleeps.)"""
@@ -570,13 +579,14 @@ def _render_maxed(theme, fonts, snapshot, frame, sprites):
     _center(draw, "until your session resets", 224, fonts["small"],
             theme["muted"])
     # keep the weekly windows visible, condensed to one line
+    mode = snapshot.get("meter_mode", "left")
     parts = []
     for w in (snapshot.get("windows") or []):
         if w.get("key") == "five_hour":
             continue
-        rem = max(0.0, min(100.0, 100 - w["utilization"]))
+        val, _s, _b = _meter_view(w["utilization"], mode)
         lbl = SHORT_LABELS.get(w.get("key"), str(w["label"])[:10])
-        parts.append(f"{lbl} {rem:.0f}%")
+        parts.append(f"{lbl} {val:.0f}%")
         if len(parts) == 2:
             break
     if parts:
@@ -593,12 +603,14 @@ def _render_history(theme, fonts, snapshot):
     draw = ImageDraw.Draw(img)
     _draw_header(draw, snapshot, theme, fonts)
     hist = snapshot.get("history") or {}
-    key = "five_hour" if hist.get("five_hour") else next(
-        (k for k, v in hist.items() if len(v) >= 2), None)
+    key = "five_hour" if len(hist.get("five_hour", [])) >= 2 else next(
+        (k for k, v in hist.items() if len(v) >= 2), "five_hour")
     series = hist.get(key or "", [])
     title = SHORT_LABELS.get(key, "Usage")
+    mode = snapshot.get("meter_mode", "left")
+    suffix = "used" if mode == "used" else "left"
     x0, y0, x1, y1 = 16, 92, 224, 214
-    _center(draw, f"{title} — usage left", 54, fonts["label"], theme["ink"])
+    _center(draw, f"{title} — usage {suffix}", 54, fonts["label"], theme["ink"])
     draw.line((x0, y1, x1, y1), fill=theme["muted"])   # baseline (0%)
     if len(series) < 2:
         _center(draw, "collecting history…", (y0 + y1) // 2,
@@ -611,17 +623,19 @@ def _render_history(theme, fonts, snapshot):
     n = len(series)
     pts = []
     for i, (_ts, util) in enumerate(series):
-        left = max(0.0, min(100.0, 100.0 - util))
+        v = util if mode == "used" else 100.0 - util
+        v = max(0.0, min(100.0, v))
         px = x0 + (i / (n - 1)) * (x1 - x0)
-        py = y1 - (left / 100.0) * (y1 - y0)
+        py = y1 - (v / 100.0) * (y1 - y0)
         pts.append((px, py))
-    cur = max(0.0, min(100.0, 100.0 - series[-1][1]))
-    sev = "crit" if cur <= 10 else "warn" if cur <= 30 else "accent"
+    cur, _suf, _bar = _meter_view(series[-1][1], mode)
+    remaining = max(0.0, min(100.0, 100.0 - series[-1][1]))
+    sev = "crit" if remaining <= 10 else "warn" if remaining <= 30 else "accent"
     draw.polygon([(x0, y1)] + pts + [(x1, y1)], fill=theme[sev + "_track"])
     draw.line(pts, fill=theme[sev], width=2)
     ex, ey = pts[-1]
     draw.ellipse((ex - 3, ey - 3, ex + 3, ey + 3), fill=theme[sev])
-    _center(draw, f"{cur:.0f}% left now", y1 + 12, fonts["big"], theme["ink"])
+    _center(draw, f"{cur:.0f}% {suffix} now", y1 + 12, fonts["big"], theme["ink"])
     _draw_wifi_footer(draw, snapshot, theme, fonts)
     return img
 
@@ -665,9 +679,11 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
     if not error and sw is not None and (100 - sw.get("utilization", 0)) <= 0.5:
         return _render_maxed(theme, fonts, snapshot, frame, sprites)
 
-    # Every ~17s, spend ~5s on an aux screen: alternate the usage-history
-    # graph and a "scan me" QR so you can open the dashboard on your phone.
-    if not error and frame % 34 >= 24:
+    # Rotating aux screens, each ~5s (10 frames at 0.5s/frame): the usage
+    # history graph (on/off) every ~20s, and a "scan me" QR every qr_interval
+    # seconds. The QR wins if both land at once.
+    if not error:
+        aux = 10
         hist = snapshot.get("history") or {}
         have_hist = (snapshot.get("lcd_history", True)
                      and any(len(v) >= 2 for v in hist.values()))
@@ -675,12 +691,10 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
         if setup_url:
             dash = (setup_url[:-len("/setup")]
                     if setup_url.endswith("/setup") else setup_url)
-        show_history = have_hist and (dash is None or (frame // 34) % 2 == 0)
-        if show_history:
-            return _render_history(theme, fonts, snapshot)
-        if dash:
+        qr_interval = int(snapshot.get("qr_interval", 60) or 0)
+        if dash and qr_interval > 0 and frame % (qr_interval * 2) < aux:
             return _render_phone_qr(theme, fonts, snapshot, dash)
-        if have_hist:
+        if have_hist and frame % 40 < aux:
             return _render_history(theme, fonts, snapshot)
 
     img = Image.new("RGB", (WIDTH, HEIGHT), theme["bg"])
@@ -706,23 +720,25 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
     elif not windows:
         draw.text((12, y), "Waiting for first reading...",
                   font=fonts["label"], fill=theme["muted"])
+    mode = snapshot.get("meter_mode", "left")
     for w in windows:
         remaining = max(0.0, min(100.0, 100 - w["utilization"]))
         sev = "crit" if remaining <= 10 else \
-            "low" if remaining <= 30 else "ok"
+            "low" if remaining <= 30 else "ok"   # danger = little left, either way
         fill = theme["crit"] if sev == "crit" else \
             theme["warn"] if sev == "low" else theme["accent"]
         track = theme[("crit" if sev == "crit" else
                        "warn" if sev == "low" else "accent") + "_track"]
         label = SHORT_LABELS.get(w.get("key"), str(w["label"])[:14])
         draw.text((12, y), label, font=fonts["label"], fill=theme["ink"])
-        value = f"{remaining:.0f}% left"
+        val, suffix, barpct = _meter_view(w["utilization"], mode)
+        value = f"{val:.0f}% {suffix}"
         tw = draw.textlength(value, font=fonts["big"])
         draw.text((228 - tw, y - 1), value, font=fonts["big"],
                   fill=theme["ink"])
         draw.rounded_rectangle((12, y + 18, 228, y + 29), 5, fill=track)
         draw.rounded_rectangle(
-            (12, y + 18, 12 + max(6, int(216 * remaining / 100)), y + 29),
+            (12, y + 18, 12 + max(6, int(216 * barpct / 100)), y + 29),
             5, fill=fill)
         draw.text((12, y + 31), _reset_text(w.get("resets_at")),
                   font=fonts["small"], fill=theme["muted"])
