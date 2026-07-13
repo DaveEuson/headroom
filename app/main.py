@@ -59,6 +59,16 @@ DEFAULT_CONFIG = {
 # session "active" (Pip keeps dancing between messages).
 ACTIVE_SECONDS = 900
 
+# Reject request bodies larger than this (a Pi Zero has little RAM).
+MAX_BODY = 262144
+
+
+def _safe_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
@@ -87,13 +97,17 @@ def load_config():
     return config
 
 
+def _atomic_write_json(path, data):
+    """Write JSON atomically via a per-thread temp file (no concurrent clobber)."""
+    tmp = f"{path}.{threading.get_ident()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+    os.replace(tmp, path)
+
+
 def save_config(config):
     """Persist the full effective config so settings survive a restart."""
-    path = config_path()
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(config, fh, indent=2)
-    os.replace(tmp, path)
+    _atomic_write_json(config_path(), config)
 
 
 # Usage history: a small per-window ring buffer of [epoch, utilization] points,
@@ -101,6 +115,7 @@ def save_config(config):
 # roughly the last 6 hours.
 HISTORY_CAP = 180
 HISTORY_MIN_GAP = 90          # seconds; coalesce points closer than this
+HISTORY_MAX_KEYS = 12         # bound distinct windows we retain history for
 
 
 def history_path():
@@ -122,11 +137,7 @@ def load_history():
 
 def save_history(history):
     try:
-        path = history_path()
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(history, fh)
-        os.replace(tmp, path)
+        _atomic_write_json(history_path(), history)
     except OSError:
         pass
 
@@ -145,6 +156,13 @@ def record_history(state, windows, now):
             series.append(point)
         if len(series) > HISTORY_CAP:
             del series[:-HISTORY_CAP]
+    # bound the number of distinct windows: drop the least-recently-updated
+    if len(state.history) > HISTORY_MAX_KEYS:
+        stale = sorted(state.history,
+                       key=lambda k: state.history[k][-1][0]
+                       if state.history[k] else 0)
+        for k in stale[:len(state.history) - HISTORY_MAX_KEYS]:
+            del state.history[k]
 
 
 # Settings the /settings page may change, each with a validator/normalizer.
@@ -199,7 +217,8 @@ def apply_settings(state, payload):
         applied[key] = value
     with state.lock:
         state.config.update(applied)   # same dict the display + snapshot read
-    save_config(state.config)
+        config_copy = dict(state.config)
+    save_config(config_copy)           # serialize a copy, not the live dict
     return applied
 
 
@@ -241,10 +260,10 @@ class State:
                 "theme": self.config.get("theme", "auto"),
                 "clock_24h": bool(self.config.get("clock_24h", False)),
                 "meter_mode": self.config.get("meter_mode", "left"),
-                "brightness": self.config.get("brightness", 100),
+                "brightness": _safe_int(self.config.get("brightness"), 100),
                 "night_dim": bool(self.config.get("night_dim", True)),
                 "lcd_history": bool(self.config.get("lcd_history", True)),
-                "qr_interval": int(self.config.get("qr_interval", 60)),
+                "qr_interval": _safe_int(self.config.get("qr_interval"), 60),
                 "history": {k: list(v) for k, v in self.history.items()},
                 "server_time": time.time(),
             }
@@ -872,8 +891,9 @@ def make_handler(state, demo):
                 self._handle_push()
                 return
             if path == "/api/settings":
-                length = int(self.headers.get("Content-Length", 0) or 0)
-                raw = self.rfile.read(length) if length else b"{}"
+                raw = self._read_body()
+                if raw is None:
+                    return
                 try:
                     payload = json.loads(raw.decode("utf-8") or "{}")
                     applied = apply_settings(state, payload)
@@ -886,8 +906,9 @@ def make_handler(state, demo):
                 self._send_json({"ok": True, **result})
                 return
             if path == "/api/wifi/join":
-                length = int(self.headers.get("Content-Length", 0) or 0)
-                raw = self.rfile.read(length) if length else b"{}"
+                raw = self._read_body()
+                if raw is None:
+                    return
                 if demo:
                     self._send_json({"ok": False,
                                      "error": "Disabled in demo mode."})
@@ -901,6 +922,15 @@ def make_handler(state, demo):
                 return
             self.send_error(404)
 
+        def _read_body(self):
+            """Read a bounded request body, or None (after replying 413)."""
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            if length > MAX_BODY:
+                self._send_json({"ok": False, "error": "request too large"},
+                                code=413)
+                return None
+            return self.rfile.read(length) if length else b"{}"
+
         def _send_html(self, text):
             body = text.encode("utf-8")
             self.send_response(200)
@@ -911,8 +941,9 @@ def make_handler(state, demo):
             self.wfile.write(body)
 
         def _handle_push(self):
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            raw = self.rfile.read(length) if length else b"{}"
+            raw = self._read_body()
+            if raw is None:
+                return
             token = state.config.get("push_token") or ""
             if token and self.headers.get("X-Push-Token") != token:
                 self._send_json({"ok": False, "error": "bad push token"}, code=403)

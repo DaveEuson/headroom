@@ -603,8 +603,8 @@ def _render_history(theme, fonts, snapshot):
     draw = ImageDraw.Draw(img)
     _draw_header(draw, snapshot, theme, fonts)
     hist = snapshot.get("history") or {}
-    key = "five_hour" if hist.get("five_hour") else next(
-        (k for k, v in hist.items() if len(v) >= 2), None)
+    key = "five_hour" if len(hist.get("five_hour", [])) >= 2 else next(
+        (k for k, v in hist.items() if len(v) >= 2), "five_hour")
     series = hist.get(key or "", [])
     title = SHORT_LABELS.get(key, "Usage")
     mode = snapshot.get("meter_mode", "left")

@@ -53,9 +53,19 @@ _scanned = []                     # [(ssid, signal, secured)]
 _status = {"phase": "starting", "error": None}
 _lock = threading.Lock()
 
+MAX_BODY = 65536                  # cap request bodies (little RAM)
+_scan_cache = (0.0, [])           # (timestamp, networks) for the control API
+
 
 def log(msg):
     print(msg, file=sys.stderr, flush=True)
+
+
+def valid_ssid(ssid):
+    """Reject empty, over-long, option-like, or control-char SSIDs before we
+    hand them to nmcli as argv (avoids a leading '-' being read as a flag)."""
+    return bool(ssid) and not ssid.startswith("-") and len(ssid) <= 64 \
+        and all(ord(c) >= 32 for c in ssid)
 
 
 def _set_status(**kw):
@@ -134,6 +144,17 @@ def scan_networks():
     return nets[:15]
 
 
+def scan_cached(max_age=15):
+    """Wi-Fi scan for the control API, cached briefly so repeated dashboard
+    polls don't each trigger a blocking rescan."""
+    global _scan_cache
+    if time.time() - _scan_cache[0] < max_age and _scan_cache[1]:
+        return _scan_cache[1]
+    nets = scan_networks()
+    _scan_cache = (time.time(), nets)
+    return nets
+
+
 def write_state(**extra):
     os.makedirs(STATE_DIR, exist_ok=True)
     data = {
@@ -195,8 +216,9 @@ def join_network(ssid, password, rescue_hotspot):
     error = (r.stderr or r.stdout).strip().splitlines()
     error = error[-1] if error else "unknown error"
     log(f"join '{ssid}' failed: {error}")
-    if not existed_before:
+    if not existed_before and ssid != HOTSPOT_CON:
         # don't leave a broken new profile around to auto-retry forever
+        # (never our own hotspot connection)
         nmcli("connection", "delete", ssid)
     msg = f"Couldn't join {ssid} — wrong password?"
     _set_status(phase="hotspot" if rescue_hotspot else "connected", error=msg)
@@ -306,16 +328,19 @@ def make_portal_handler():
 
         def do_POST(self):
             length = int(self.headers.get("Content-Length", 0) or 0)
+            if length > MAX_BODY:
+                self._page("Request too large.", code=413)
+                return
             form = urllib.parse.parse_qs(
                 self.rfile.read(length).decode("utf-8", "replace"))
             ssid = (form.get("ssid_other", [""])[0].strip()
                     or form.get("ssid", [""])[0].strip())
             password = form.get("password", [""])[0]
-            if not ssid:
+            if not valid_ssid(ssid):
                 self._page(PORTAL_PAGE
                            .replace("__NETWORKS__", _network_rows())
                            .replace("__ERROR__",
-                                    '<p class="err">Pick or type a network first.</p>'))
+                                    '<p class="err">Pick or type a valid network first.</p>'))
                 return
             self._page(JOINING_PAGE.replace("__SSID__", html.escape(ssid)))
             threading.Thread(target=join_network,
@@ -386,7 +411,7 @@ def make_control_handler():
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             if path == "/networks":
-                nets = scan_networks()
+                nets = scan_cached()
                 self._json({
                     "current": current_ssid(),
                     "networks": [
@@ -408,13 +433,16 @@ def make_control_handler():
                 self._json({"error": "not found"}, 404)
                 return
             length = int(self.headers.get("Content-Length", 0) or 0)
+            if length > MAX_BODY:
+                self._json({"ok": False, "error": "request too large"}, 413)
+                return
             try:
                 data = json.loads(self.rfile.read(length).decode("utf-8"))
             except ValueError:
                 data = {}
             ssid = str(data.get("ssid", "")).strip()
-            if not ssid:
-                self._json({"ok": False, "error": "missing ssid"}, 400)
+            if not valid_ssid(ssid):
+                self._json({"ok": False, "error": "invalid ssid"}, 400)
                 return
             rescue = hotspot_active()
             threading.Thread(
