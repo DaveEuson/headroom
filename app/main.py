@@ -43,9 +43,11 @@ DEFAULT_CONFIG = {
     "push_token": "",         # optional shared secret the companion must send
     "theme": "auto",          # "auto" (day/night by schedule), "light", "dark"
     "clock_24h": False,       # 24-hour time instead of AM/PM
+    "meter_mode": "left",     # "left" (usage remaining) or "used"
     "brightness": 100,        # LCD backlight 0-100 (dims with PWM; on/off else)
     "night_dim": True,        # dim the LCD during the night window
     "lcd_history": True,      # rotate a usage-history graph onto the LCD
+    "qr_interval": 60,        # seconds between phone-QR appearances (0 = off)
     "audio_alerts": False,    # beep on out-of-credits / restored (off default)
     "push_service": "none",   # "none" | "ntfy" | "pushover"
     "ntfy_topic": "",         # your ntfy.sh topic
@@ -153,6 +155,13 @@ def _clamp_brightness(v):
         return None
 
 
+def _clamp_qr(v):
+    try:
+        return max(0, min(3600, int(round(float(v)))))
+    except (TypeError, ValueError):
+        return None
+
+
 # Semi-secret fields: masked in GET, and the mask is ignored on POST so
 # leaving the field untouched doesn't overwrite the saved value.
 SECRET_FIELDS = ("pushover_token", "pushover_user")
@@ -161,9 +170,11 @@ SECRET_MASK = "••••••"
 SETTINGS_FIELDS = {
     "theme": lambda v: v if v in ("auto", "light", "dark") else None,
     "clock_24h": lambda v: bool(v),
+    "meter_mode": lambda v: v if v in ("left", "used") else None,
     "brightness": _clamp_brightness,
     "night_dim": lambda v: bool(v),
     "lcd_history": lambda v: bool(v),
+    "qr_interval": _clamp_qr,
     "audio_alerts": lambda v: bool(v),
     "push_service": lambda v: v if v in ("none", "ntfy", "pushover") else None,
     "ntfy_topic": lambda v: str(v)[:80],
@@ -229,9 +240,11 @@ class State:
                 },
                 "theme": self.config.get("theme", "auto"),
                 "clock_24h": bool(self.config.get("clock_24h", False)),
+                "meter_mode": self.config.get("meter_mode", "left"),
                 "brightness": self.config.get("brightness", 100),
                 "night_dim": bool(self.config.get("night_dim", True)),
                 "lcd_history": bool(self.config.get("lcd_history", True)),
+                "qr_interval": int(self.config.get("qr_interval", 60)),
                 "history": {k: list(v) for k, v in self.history.items()},
                 "server_time": time.time(),
             }
@@ -266,9 +279,11 @@ def demo_snapshot():
         "night": {"start": "22:00", "end": "07:00"},
         "theme": "auto",
         "clock_24h": False,
+        "meter_mode": "left",
         "brightness": 100,
         "night_dim": True,
         "lcd_history": True,
+        "qr_interval": 60,
         "history": _demo_history(t, session, weekly, opus),
         "server_time": t,
     }
@@ -640,6 +655,13 @@ SETTINGS_PAGE = """<!DOCTYPE html>
       </select>
     </div>
     <div class="row">
+      <div class="lab">Meters show<small>How much is left, or how much is used</small></div>
+      <select id="meter_mode">
+        <option value="left">% left</option>
+        <option value="used">% used</option>
+      </select>
+    </div>
+    <div class="row">
       <div class="lab">24-hour clock<small>Show 18:30 instead of 6:30 PM</small></div>
       <label class="sw"><input type="checkbox" id="clock_24h"><span></span></label>
     </div>
@@ -655,6 +677,15 @@ SETTINGS_PAGE = """<!DOCTYPE html>
     <div class="row">
       <div class="lab">Usage history on screen<small>Rotate a trend graph onto the LCD</small></div>
       <label class="sw"><input type="checkbox" id="lcd_history"><span></span></label>
+    </div>
+    <div class="row">
+      <div class="lab">Phone QR on screen<small>How often the scan-me QR appears</small></div>
+      <select id="qr_interval">
+        <option value="0">Off</option>
+        <option value="60">Every ~1 min</option>
+        <option value="120">Every ~2 min</option>
+        <option value="300">Every ~5 min</option>
+      </select>
     </div>
   </div>
 
@@ -708,11 +739,13 @@ SETTINGS_PAGE = """<!DOCTYPE html>
     try {
       var s = await (await fetch("/api/settings")).json();
       document.getElementById("theme").value = s.theme || "auto";
+      document.getElementById("meter_mode").value = s.meter_mode || "left";
       document.getElementById("clock_24h").checked = !!s.clock_24h;
       document.getElementById("brightness").value = s.brightness || 100;
       document.getElementById("brightval").textContent = (s.brightness || 100) + "%";
       document.getElementById("night_dim").checked = !!s.night_dim;
       document.getElementById("lcd_history").checked = !!s.lcd_history;
+      document.getElementById("qr_interval").value = String(s.qr_interval != null ? s.qr_interval : 60);
       document.getElementById("audio_alerts").checked = !!s.audio_alerts;
       document.getElementById("push_service").value = s.push_service || "none";
       document.getElementById("ntfy_topic").value = s.ntfy_topic || "";
@@ -732,8 +765,14 @@ SETTINGS_PAGE = """<!DOCTYPE html>
   document.getElementById("theme").addEventListener("change", function(e){
     save({ theme: e.target.value });
   });
+  document.getElementById("meter_mode").addEventListener("change", function(e){
+    save({ meter_mode: e.target.value });
+  });
   document.getElementById("clock_24h").addEventListener("change", function(e){
     save({ clock_24h: e.target.checked });
+  });
+  document.getElementById("qr_interval").addEventListener("change", function(e){
+    save({ qr_interval: parseInt(e.target.value, 10) });
   });
   document.getElementById("brightness").addEventListener("input", function(e){
     document.getElementById("brightval").textContent = e.target.value + "%";
