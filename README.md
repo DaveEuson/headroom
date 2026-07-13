@@ -6,6 +6,12 @@ how much usage you have left, when it resets, and whether Claude is being
 used right now — no terminal, no menubar, no estimating.
 
 <p align="center">
+  <img src="docs/screenshots/device.jpg" width="360" alt="The assembled tracker running in its 3D-printed case, night mode, Pip asleep">
+  <br>
+  <em>The finished tracker — running v1.1 in the Ground&nbsp;Zero case, night mode.</em>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/day.png" width="380" alt="Day mode — cream Claude theme, Pip dancing">
   &nbsp;
   <img src="docs/screenshots/night.png" width="380" alt="Night mode — dark Claude theme, Pip asleep">
