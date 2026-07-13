@@ -208,25 +208,50 @@ def windows_from_usage(raw):
     return out
 
 
+class LiveUnavailable(Exception):
+    """A Claude Code login exists but live usage is temporarily unreadable.
+    We must NOT fall back to log estimates in this case — stale real numbers
+    on the tracker beat fresh wrong ones."""
+
+    def __init__(self, msg, retry_after=0):
+        super().__init__(msg)
+        self.retry_after = retry_after
+
+
 def get_live_windows():
-    """Real usage via Claude Code's login. Returns (windows, plan) or None."""
+    """Real usage via Claude Code's login. Returns (windows, plan), or None
+    when there's no login at all. Raises LiveUnavailable on transient failure."""
     creds, save_fn = read_creds()
     if not creds:
         return None
     token = valid_token(creds, save_fn)
     if not token:
-        return None
+        raise LiveUnavailable(
+            "couldn't refresh the Claude Code token; run `claude` on this "
+            "computer once to refresh the login")
     try:
         raw = fetch_usage(token)
     except urllib.error.HTTPError as exc:
-        print(f"usage endpoint returned HTTP {exc.code}", file=sys.stderr)
-        return None
+        retry_after = 0
+        try:
+            retry_after = int(exc.headers.get("Retry-After", 0) or 0)
+        except (TypeError, ValueError):
+            pass
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:200]
+        except Exception:  # noqa: BLE001
+            pass
+        raise LiveUnavailable(
+            f"usage endpoint returned HTTP {exc.code}"
+            + (f", retry after {retry_after}s" if retry_after else "")
+            + (f" — {detail}" if detail else ""),
+            retry_after=retry_after)
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        print(f"couldn't read usage: {exc}", file=sys.stderr)
-        return None
+        raise LiveUnavailable(f"couldn't read usage: {exc}")
     windows = windows_from_usage(raw)
     if not windows:
-        return None
+        raise LiveUnavailable("usage response had no windows")
     return windows, creds.get("subscriptionType")
 
 
@@ -494,30 +519,58 @@ def _print_no_claude():
 
 
 def run_once(cfg):
-    live = get_live_windows()
+    """One poll+push cycle. Returns (ok, extra_sleep_seconds)."""
+    try:
+        live = get_live_windows()
+    except LiveUnavailable as exc:
+        # A login exists but live usage is temporarily unreadable (rate
+        # limit, network blip). Skip this push: the tracker keeps showing
+        # the last REAL numbers instead of wrong log-based estimates.
+        print(f"live usage unavailable ({exc}); skipping this push so the "
+              "tracker keeps its last real reading", file=sys.stderr)
+        return False, min(900, exc.retry_after)
     if live:
         windows, plan = live
         source = "live"
     else:
+        # No Claude Code login on this machine at all -> estimation is the
+        # best we can do (clearly tagged as such).
         windows = get_log_windows(cfg["limits"])
         plan, source = None, "estimated"
         if not windows:
             _print_no_claude()
-            return False
+            return False, 0
     payload = {"windows": windows, "plan": plan, "source": source}
     try:
         result = push(cfg["pi"], cfg["token"], payload)
     except (urllib.error.URLError, OSError) as exc:
         print(f"Couldn't reach the Pi at {cfg['pi']}: {exc}", file=sys.stderr)
-        return False
+        return False, 0
     if not result.get("ok"):
         print(f"Pi rejected the push: {result.get('error')}", file=sys.stderr)
-        return False
+        return False, 0
     tag = "LIVE" if source == "live" else "estimated"
     summary = ", ".join(f"{w['label'].split(' (')[0]} {w['utilization']}%"
                         for w in windows)
     print(f"pushed [{tag}]: {summary}")
-    return True
+    return True, 0
+
+
+LOCK_PORT = 47823   # localhost mutex so two companions can't double-poll
+
+
+def _single_instance():
+    """Bind a localhost port as a process-wide lock. Returns the socket to
+    hold for our lifetime, or None if another companion already has it."""
+    import socket as _socket
+    s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", LOCK_PORT))
+        s.listen(1)
+        return s
+    except OSError:
+        s.close()
+        return None
 
 
 def main():
@@ -551,11 +604,21 @@ def main():
                      "powered on and on the same Wi-Fi, or pass "
                      "--pi http://<its-address>:8080")
 
-    print(f"Headroom companion -> {cfg['pi']} (every {cfg['interval']}s)")
     if args.once:
-        sys.exit(0 if run_once(cfg) else 1)
+        print(f"Headroom companion -> {cfg['pi']} (single push)")
+        ok, _ = run_once(cfg)
+        sys.exit(0 if ok else 1)
 
-    first_ok = run_once(cfg)
+    lock = _single_instance()
+    if lock is None:
+        print("Another Headroom companion is already running on this computer "
+              "(probably the auto-started one) — exiting so we don't "
+              "double-poll Anthropic. To run this one instead, stop the other "
+              "first (or reboot after --uninstall).")
+        return
+
+    print(f"Headroom companion -> {cfg['pi']} (every {cfg['interval']}s)")
+    first_ok, _ = run_once(cfg)
     if first_ok and not args.no_install and not os.path.isfile(INSTALLED_MARKER):
         try:
             where = install_autostart()
@@ -567,7 +630,10 @@ def main():
             print(f"(couldn't set auto-start: {exc})", file=sys.stderr)
     while True:
         time.sleep(max(30, cfg["interval"]))
-        run_once(cfg)
+        _ok, extra = run_once(cfg)
+        if extra:
+            print(f"backing off {extra}s (rate limited)", file=sys.stderr)
+            time.sleep(extra)
 
 
 if __name__ == "__main__":
