@@ -1,4 +1,4 @@
-"""ClaudeTrackerPi -- tiny web dashboard for Claude usage limits + PiSugar battery.
+"""Headroom -- tiny web dashboard for Claude usage limits + PiSugar battery.
 
 Run:  python3 app/main.py            (real data, needs credentials -- see README)
       python3 app/main.py --demo     (fake data, no credentials needed)
@@ -48,6 +48,7 @@ DEFAULT_CONFIG = {
     "night_dim": True,        # dim the LCD during the night window
     "lcd_history": True,      # rotate a usage-history graph onto the LCD
     "qr_interval": 60,        # seconds between phone-QR appearances (0 = off)
+    "scanlines": True,        # subtle CRT scanline overlay on the LCD
     "audio_alerts": False,    # beep on out-of-credits / restored (off default)
     "push_service": "none",   # "none" | "ntfy" | "pushover"
     "ntfy_topic": "",         # your ntfy.sh topic
@@ -193,6 +194,7 @@ SETTINGS_FIELDS = {
     "night_dim": lambda v: bool(v),
     "lcd_history": lambda v: bool(v),
     "qr_interval": _clamp_qr,
+    "scanlines": lambda v: bool(v),
     "audio_alerts": lambda v: bool(v),
     "push_service": lambda v: v if v in ("none", "ntfy", "pushover") else None,
     "ntfy_topic": lambda v: str(v)[:80],
@@ -242,7 +244,7 @@ class State:
     def snapshot(self):
         with self.lock:
             return {
-                "app": "ClaudeTrackerPi",
+                "app": "Headroom",
                 "windows": (self.usage or {}).get("windows", []),
                 "plan": (self.usage or {}).get("plan"),
                 "usage_error": self.usage_error,
@@ -264,6 +266,7 @@ class State:
                 "night_dim": bool(self.config.get("night_dim", True)),
                 "lcd_history": bool(self.config.get("lcd_history", True)),
                 "qr_interval": _safe_int(self.config.get("qr_interval"), 60),
+                "scanlines": bool(self.config.get("scanlines", True)),
                 "history": {k: list(v) for k, v in self.history.items()},
                 "server_time": time.time(),
             }
@@ -279,7 +282,7 @@ def demo_snapshot():
     session_reset = now + datetime.timedelta(hours=2, minutes=14)
     weekly_reset = now + datetime.timedelta(days=3, hours=5)
     return {
-        "app": "ClaudeTrackerPi",
+        "app": "Headroom",
         "windows": [
             {"key": "five_hour", "label": "Session (5 hour)",
              "utilization": round(session, 1),
@@ -303,6 +306,7 @@ def demo_snapshot():
         "night_dim": True,
         "lcd_history": True,
         "qr_interval": 60,
+        "scanlines": True,
         "history": _demo_history(t, session, weekly, opus),
         "server_time": t,
     }
@@ -335,7 +339,7 @@ def start_pollers(state, config):
                          or time.time() - state.usage_updated > 600)
                 if stale:
                     state.usage_error = (
-                        "Waiting for the ClaudeTracker companion on your "
+                        "Waiting for the Headroom companion on your "
                         "computer. See the setup guide to start it."
                     )
             time.sleep(15)
@@ -413,7 +417,7 @@ def _creds_write_path(config):
     configured = (config or {}).get("credentials_path")
     if configured:
         return os.path.expanduser(configured)
-    return os.path.expanduser("~/.claude-tracker/credentials.json")
+    return os.path.expanduser("~/.headroom/credentials.json")
 
 
 def apply_push(state, config, payload):
@@ -541,7 +545,7 @@ WIFI_PAGE = """<!DOCTYPE html>
   </div>
   <p class="muted" style="margin-top:14px">Switching drops the tracker off
     the network for ~30 seconds. If it can't join the new network, it comes
-    back on the old one (or starts its <b>ClaudeTracker-Setup</b> hotspot).</p>
+    back on the old one (or starts its <b>Headroom-Setup</b> hotspot).</p>
   <p class="muted"><a class="back" href="/">&larr; Back to dashboard</a></p>
 </div>
 <script>
@@ -706,6 +710,10 @@ SETTINGS_PAGE = """<!DOCTYPE html>
         <option value="300">Every ~5 min</option>
       </select>
     </div>
+    <div class="row">
+      <div class="lab">Retro scanlines<small>A subtle CRT scanline look on the screen</small></div>
+      <label class="sw"><input type="checkbox" id="scanlines"><span></span></label>
+    </div>
   </div>
 
   <h2>Alerts</h2>
@@ -765,6 +773,7 @@ SETTINGS_PAGE = """<!DOCTYPE html>
       document.getElementById("night_dim").checked = !!s.night_dim;
       document.getElementById("lcd_history").checked = !!s.lcd_history;
       document.getElementById("qr_interval").value = String(s.qr_interval != null ? s.qr_interval : 60);
+      document.getElementById("scanlines").checked = s.scanlines !== false;
       document.getElementById("audio_alerts").checked = !!s.audio_alerts;
       document.getElementById("push_service").value = s.push_service || "none";
       document.getElementById("ntfy_topic").value = s.ntfy_topic || "";
@@ -792,6 +801,9 @@ SETTINGS_PAGE = """<!DOCTYPE html>
   });
   document.getElementById("qr_interval").addEventListener("change", function(e){
     save({ qr_interval: parseInt(e.target.value, 10) });
+  });
+  document.getElementById("scanlines").addEventListener("change", function(e){
+    save({ scanlines: e.target.checked });
   });
   document.getElementById("brightness").addEventListener("input", function(e){
     document.getElementById("brightval").textContent = e.target.value + "%";
@@ -834,7 +846,7 @@ SETTINGS_PAGE = """<!DOCTYPE html>
 
 def make_handler(state, demo):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "ClaudeTrackerPi/1.0"
+        server_version = "Headroom/1.0"
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
@@ -1016,7 +1028,7 @@ def main():
         ("0.0.0.0", int(config["port"])), make_handler(state, args.demo)
     )
     mode = "DEMO data" if args.demo else "live data"
-    print(f"ClaudeTrackerPi serving {mode} on http://0.0.0.0:{config['port']}")
+    print(f"Headroom serving {mode} on http://0.0.0.0:{config['port']}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

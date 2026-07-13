@@ -3,7 +3,7 @@
 
 The tracker service grabs the same GPIO/SPI, so STOP it first:
 
-    sudo systemctl stop claude-tracker
+    sudo systemctl stop headroom
     python3 scripts/lcd-test.py
 
 Watch the physical screen and read the prompts — it tells you what it's
@@ -63,7 +63,7 @@ def color_test():
 
 if __name__ == "__main__":
     print("Whisplay LCD bring-up test. Make sure the tracker is stopped:")
-    print("  sudo systemctl stop claude-tracker")
+    print("  sudo systemctl stop headroom")
     backlight_test()
     color_test()
     print("\nTest complete. Tell Claude: which backlight level lit up, and "

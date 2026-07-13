@@ -11,13 +11,13 @@ windows-latest + macos-latest — is the clean way to produce both.)
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --name ClaudeTrackerCompanion --noconsole companion.py
+pyinstaller --onefile --name HeadroomCompanion --noconsole companion.py
 ```
 
 The binary lands in `dist/`:
-- Windows → `dist/ClaudeTrackerCompanion.exe`
-- macOS   → `dist/ClaudeTrackerCompanion` (wrap in a `.app` or ship as-is)
-- Linux   → `dist/ClaudeTrackerCompanion`
+- Windows → `dist/HeadroomCompanion.exe`
+- macOS   → `dist/HeadroomCompanion` (wrap in a `.app` or ship as-is)
+- Linux   → `dist/HeadroomCompanion`
 
 `--noconsole` hides the terminal window so it runs silently in the background.
 

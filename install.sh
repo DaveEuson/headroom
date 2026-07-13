@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # One-command install on the Pi:
-#   git clone https://github.com/DaveEuson/ClaudeTrackerPi.git
-#   cd ClaudeTrackerPi && ./install.sh
+#   git clone https://github.com/DaveEuson/Headroom.git
+#   cd Headroom && ./install.sh
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVICE=claude-tracker
+SERVICE=headroom
 RUN_USER="${SUDO_USER:-$(whoami)}"
 
 if ! command -v python3 >/dev/null; then
@@ -28,10 +28,20 @@ fi
 
 PORT=$(python3 -c "import json;print(json.load(open('$DIR/config.json')).get('port',8080))")
 
+# Migration: retire the old pre-rename services if this used to be ClaudeTrackerPi.
+for old in claude-tracker claude-tracker-wifi; do
+  if [ -f "/etc/systemd/system/$old.service" ]; then
+    echo "Removing old '$old' service..."
+    sudo systemctl disable --now "$old" 2>/dev/null || true
+    sudo rm -f "/etc/systemd/system/$old.service"
+  fi
+done
+sudo rm -f /etc/NetworkManager/dnsmasq-shared.d/claude-tracker.conf
+
 echo "Installing systemd service '$SERVICE' (runs as $RUN_USER)..."
 sudo tee /etc/systemd/system/$SERVICE.service >/dev/null <<UNIT
 [Unit]
-Description=ClaudeTrackerPi - Claude usage dashboard
+Description=Headroom - Claude usage dashboard
 After=network-online.target
 Wants=network-online.target
 
@@ -48,13 +58,13 @@ WantedBy=multi-user.target
 UNIT
 
 # First-boot Wi-Fi provisioning: if the Pi has no network, it becomes a
-# hotspot ("ClaudeTracker-Setup") with a phone setup page. Needs
+# hotspot ("Headroom-Setup") with a phone setup page. Needs
 # NetworkManager (default on Raspberry Pi OS Bookworm and later).
 if command -v nmcli >/dev/null; then
   echo "Installing Wi-Fi setup service '$SERVICE-wifi'..."
   sudo tee /etc/systemd/system/$SERVICE-wifi.service >/dev/null <<UNIT
 [Unit]
-Description=ClaudeTrackerPi - Wi-Fi manager (setup hotspot + dashboard API)
+Description=Headroom - Wi-Fi manager (setup hotspot + dashboard API)
 After=NetworkManager.service
 Wants=NetworkManager.service
 
@@ -72,7 +82,7 @@ UNIT
   # automatically on phones (applies only to NM's shared/hotspot mode)
   sudo mkdir -p /etc/NetworkManager/dnsmasq-shared.d
   echo "address=/#/10.42.0.1" | \
-    sudo tee /etc/NetworkManager/dnsmasq-shared.d/claude-tracker.conf >/dev/null
+    sudo tee /etc/NetworkManager/dnsmasq-shared.d/headroom.conf >/dev/null
   sudo systemctl enable $SERVICE-wifi >/dev/null
 else
   echo "NetworkManager (nmcli) not found - skipping Wi-Fi setup hotspot."

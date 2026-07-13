@@ -383,7 +383,7 @@ _SETUP_HINTS = ("credential", "sign-in", "sign in", "log in", "login",
                 "access token", "re-copy", "not logged in", "not connected",
                 "companion", "waiting for")
 
-WIFI_STATE_FILE = "/run/claude-tracker/wifi.json"
+WIFI_STATE_FILE = "/run/headroom/wifi.json"
 
 
 def _wifi_setup_state():
@@ -476,7 +476,7 @@ def _render_wifi_setup(theme, fonts, wifi):
             theme["muted"])
     _center(draw, "setup page opens on your phone", 65, fonts["small"],
             theme["muted"])
-    ssid = wifi.get("ssid", "ClaudeTracker-Setup")
+    ssid = wifi.get("ssid", "Headroom-Setup")
     psk = wifi.get("password", "")
     qr = _qr_image(f"WIFI:T:WPA;S:{ssid};P:{psk};;", 140)
     if qr:
@@ -563,6 +563,24 @@ def _draw_mascot(img, draw, mood, frame, theme, sprites):
         _draw_pip(draw, mood, frame, theme)
 
 
+_SCANLINES = None
+
+
+def _retro(img, snapshot):
+    """Subtle CRT scanline overlay for the Headroom look (skip on the QR)."""
+    if not snapshot.get("scanlines", True):
+        return img
+    global _SCANLINES
+    from PIL import Image, ImageDraw
+    if _SCANLINES is None:
+        ov = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+        d = ImageDraw.Draw(ov)
+        for y in range(0, HEIGHT, 3):        # a faint dark line every 3px
+            d.line((0, y, WIDTH, y), fill=(0, 0, 0, 32))
+        _SCANLINES = ov
+    return Image.alpha_composite(img.convert("RGBA"), _SCANLINES).convert("RGB")
+
+
 def _render_maxed(theme, fonts, snapshot, frame, sprites):
     """Session limit hit: a big live countdown to when it resets."""
     from PIL import Image, ImageDraw
@@ -592,7 +610,7 @@ def _render_maxed(theme, fonts, snapshot, frame, sprites):
     if parts:
         _center(draw, "   ".join(parts), 246, fonts["small"], theme["muted"])
     _draw_wifi_footer(draw, snapshot, theme, fonts)
-    return img
+    return _retro(img, snapshot)
 
 
 def _render_history(theme, fonts, snapshot):
@@ -616,7 +634,7 @@ def _render_history(theme, fonts, snapshot):
         _center(draw, "collecting history…", (y0 + y1) // 2,
                 fonts["small"], theme["muted"])
         _draw_wifi_footer(draw, snapshot, theme, fonts)
-        return img
+        return _retro(img, snapshot)
     span_h = (series[-1][0] - series[0][0]) / 3600.0
     draw.text((x0, 74), f"last {span_h:.0f}h" if span_h >= 1 else "last <1h",
               font=fonts["small"], fill=theme["muted"])
@@ -637,7 +655,7 @@ def _render_history(theme, fonts, snapshot):
     draw.ellipse((ex - 3, ey - 3, ex + 3, ey + 3), fill=theme[sev])
     _center(draw, f"{cur:.0f}% {suffix} now", y1 + 12, fonts["big"], theme["ink"])
     _draw_wifi_footer(draw, snapshot, theme, fonts)
-    return img
+    return _retro(img, snapshot)
 
 
 def _render_phone_qr(theme, fonts, snapshot, url):
@@ -658,7 +676,7 @@ def _render_phone_qr(theme, fonts, snapshot, url):
         _center(draw, url.replace("http://", ""), yb, fonts["small"],
                 theme["accent"])
     _draw_wifi_footer(draw, snapshot, theme, fonts)
-    return img
+    return _retro(img, snapshot)
 
 
 def render(snapshot, frame, fonts, sprites=None, setup_url=None):
@@ -744,7 +762,7 @@ def render(snapshot, frame, fonts, sprites=None, setup_url=None):
                   font=fonts["small"], fill=theme["muted"])
         y += 48
     _draw_wifi_footer(draw, snapshot, theme, fonts)
-    return img
+    return _retro(img, snapshot)
 
 
 def run(snapshot_fn, config):

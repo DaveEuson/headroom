@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ClaudeTracker companion — runs on the computer where you use Claude Code.
+"""Headroom companion — runs on the computer where you use Claude Code.
 
 Reads the *real* Claude subscription usage numbers and pushes them to the Pi.
 
@@ -34,13 +34,13 @@ import time
 import urllib.error
 import urllib.request
 
-APP_MARKER = "ClaudeTrackerPi"  # /api/status "app" field, used for discovery
+APP_MARKER = "Headroom"  # /api/status "app" field, used for discovery
 
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 OAUTH_BETA = "oauth-2025-04-20"
-USER_AGENT = "ClaudeTrackerPi-Companion/1.0"
+USER_AGENT = "Headroom-Companion/1.0"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 REFRESH_MARGIN = 300  # refresh if the token expires within 5 minutes
 
@@ -317,7 +317,7 @@ def _probe(url):
         req = urllib.request.Request(url.rstrip("/") + "/api/status")
         with urllib.request.urlopen(req, timeout=0.8) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return data.get("app") == APP_MARKER
+        return data.get("app") in (APP_MARKER, "ClaudeTrackerPi")  # accept old
     except Exception:
         return False
 
@@ -380,7 +380,7 @@ def install_autostart():
         startup = os.path.join(os.environ.get("APPDATA", ""), "Microsoft",
                                "Windows", "Start Menu", "Programs", "Startup")
         os.makedirs(startup, exist_ok=True)
-        target = os.path.join(startup, "ClaudeTrackerCompanion.bat")
+        target = os.path.join(startup, "HeadroomCompanion.bat")
         with open(target, "w", encoding="utf-8") as fh:
             fh.write(f'@echo off\r\nstart "" "{pyw}" "{script}"\r\n')
         return target
@@ -409,7 +409,7 @@ def install_autostart():
     target = os.path.join(d, "claudetracker-companion.service")
     with open(target, "w", encoding="utf-8") as fh:
         fh.write(f"""[Unit]
-Description=ClaudeTracker companion
+Description=Headroom companion
 After=network-online.target
 
 [Service]
@@ -430,7 +430,7 @@ def uninstall_autostart():
     for p in (
         os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows",
                      "Start Menu", "Programs", "Startup",
-                     "ClaudeTrackerCompanion.bat"),
+                     "HeadroomCompanion.bat"),
         os.path.expanduser("~/Library/LaunchAgents/"
                            "com.claudetracker.companion.plist"),
         os.path.expanduser("~/.config/systemd/user/"
@@ -522,7 +522,7 @@ def run_once(cfg):
 
 def main():
     cfg = load_config()
-    ap = argparse.ArgumentParser(description="ClaudeTracker companion")
+    ap = argparse.ArgumentParser(description="Headroom companion")
     ap.add_argument("--pi", default=cfg["pi"],
                     help="tracker URL (auto-discovered if omitted)")
     ap.add_argument("--token", default=cfg["token"])
@@ -551,7 +551,7 @@ def main():
                      "powered on and on the same Wi-Fi, or pass "
                      "--pi http://<its-address>:8080")
 
-    print(f"ClaudeTracker companion -> {cfg['pi']} (every {cfg['interval']}s)")
+    print(f"Headroom companion -> {cfg['pi']} (every {cfg['interval']}s)")
     if args.once:
         sys.exit(0 if run_once(cfg) else 1)
 

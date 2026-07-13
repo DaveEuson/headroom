@@ -1,6 +1,6 @@
 # Smoke test — first run on the Pi
 
-A quick checklist to get ClaudeTrackerPi running and confirm it works.
+A quick checklist to get Headroom running and confirm it works.
 Takes ~15 minutes. You need the Pi, the Whisplay HAT + PiSugar attached,
 and the computer where you normally use Claude Code.
 
@@ -18,14 +18,14 @@ SSH in from your computer (`ssh pi@raspberrypi.local`), then:
 
 ```bash
 sudo apt update
-git clone -b claude/pi-usage-tracker-6mnamz https://github.com/DaveEuson/ClaudeTrackerPi.git
-cd ClaudeTrackerPi
+git clone -b claude/pi-usage-tracker-6mnamz https://github.com/DaveEuson/Headroom.git
+cd Headroom
 ./install.sh
 sudo reboot
 ```
 
 `install.sh` installs the display libraries, enables SPI (needed for the
-HAT screen), and sets up the `claude-tracker` service to start on boot.
+HAT screen), and sets up the `headroom` service to start on boot.
 The reboot makes sure SPI is live. It prints your dashboard URL — note it.
 
 ## 3. Start the companion on your computer
@@ -41,8 +41,8 @@ sends the first reading, and installs itself to run at every login.
 Prefer the script? On the **computer where you use Claude Code** (not the Pi):
 
 ```bash
-git clone -b claude/pi-usage-tracker-6mnamz https://github.com/DaveEuson/ClaudeTrackerPi.git
-cd ClaudeTrackerPi
+git clone -b claude/pi-usage-tracker-6mnamz https://github.com/DaveEuson/Headroom.git
+cd Headroom
 python3 companion/companion.py
 ```
 
@@ -67,8 +67,8 @@ Preview the other looks by adding to the URL:
 ## 5. If something's off
 
 ```bash
-journalctl -u claude-tracker -f      # live logs on the Pi
-sudo systemctl restart claude-tracker
+journalctl -u headroom -f      # live logs on the Pi
+sudo systemctl restart headroom
 ```
 
 | Symptom | Fix |
