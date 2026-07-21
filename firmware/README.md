@@ -56,6 +56,24 @@ Within a couple of minutes the meters go live.
 
 Panel: ST7789, 240×320, IPS, rotation 0 = portrait.
 
+## Roadmap
+
+- **v0 (this)** — screen + Wi-Fi + companion-fed meters. Bring-up day.
+- **Phase 1.5 — touch & motion.** The hardware's already there (CST816D
+  capacitive touch on I2C 48/47, plus a 6-axis IMU):
+  - **Tap** → cycle screens: meters → history graph → phone QR
+  - **Long-press** → toggle % left / % used, brightness
+  - **IMU auto-rotate** → portrait/landscape follows how it sits on the desk
+  - **Face-down to dim**, shake to wake
+  - **BOOT button held 5s** → factory-reset Wi-Fi
+- **Phase 2 — self-contained.** Poll Anthropic's usage endpoint on-device:
+  paste a dedicated credential once via the device's web page, token
+  refreshed on-device (needs its own Claude login to avoid refresh-token
+  rotation clashes with your computer's Claude Code). No companion at all.
+- **Phase 3 — polish.** Battery gauge from the LiPo header, usage history
+  stored in flash, alerts (the board has no speaker, but phone push works
+  from anywhere).
+
 ## Notes
 
 - The header clock's timezone is a `TZ` string in `src/main.cpp`
