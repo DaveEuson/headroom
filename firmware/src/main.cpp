@@ -36,9 +36,7 @@ static Arduino_DataBus *bus =
 static Arduino_GFX *gfx =
     new Arduino_ST7789(bus, LCD_RST, 0 /*rotation*/, true /*IPS*/, 240, 320);
 
-// Claude night palette in RGB565
-#define RGB565(r, g, b) \
-    (uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
+// Claude night palette in RGB565 (macro provided by Arduino_GFX)
 static const uint16_t C_BG    = RGB565(0x26, 0x26, 0x24);
 static const uint16_t C_INK   = RGB565(0xF5, 0xF4, 0xEF);
 static const uint16_t C_MUTED = RGB565(0x94, 0x90, 0x7E);
