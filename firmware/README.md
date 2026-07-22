@@ -31,8 +31,9 @@ clashes with your computer's Claude Code.
    BOOT, retry (classic ESP32 bootloader dance).
 
 4. On the screen: join the `Headroom-Setup` Wi-Fi from your phone
-   (password `claudepi`), open `http://192.168.4.1`, enter your home Wi-Fi.
-   The board reboots and shows its address.
+   (password `headroom`), open `http://192.168.4.1`, then **pick your home
+   network from the scanned list** and type its password (or type the name by
+   hand if it's hidden). The board reboots and shows its address.
 5. Feed it from your computer:
 
    ```
@@ -54,7 +55,8 @@ Within a couple of minutes the meters go live.
 | LCD RST | — (soft reset) |
 | Touch (CST816D, I2C 0x15) | SDA 48 / SCL 47 |
 
-Panel: ST7789, 240×320, IPS, rotation 0 = portrait.
+Panel: ST7789, 240×320, IPS, rotation 2 = portrait with the USB-C connector on
+top (flip to 0 in `src/main.cpp` if you mount it the other way up).
 
 ## Roadmap
 

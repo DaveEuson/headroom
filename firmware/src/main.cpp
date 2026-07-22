@@ -32,9 +32,9 @@
 
 static Arduino_DataBus *bus =
     new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI, LCD_MISO);
-// rotation 0 = portrait 240x320, IPS panel
+// rotation 2 = portrait 240x320 flipped 180° (USB-C connector at the top)
 static Arduino_GFX *gfx =
-    new Arduino_ST7789(bus, LCD_RST, 0 /*rotation*/, true /*IPS*/, 240, 320);
+    new Arduino_ST7789(bus, LCD_RST, 2 /*rotation*/, true /*IPS*/, 240, 320);
 
 // Claude night palette in RGB565 (macro provided by Arduino_GFX)
 static const uint16_t C_BG    = RGB565(0x26, 0x26, 0x24);
@@ -70,7 +70,7 @@ static bool apMode = false;
 
 // Same defaults as the Pi build
 static const char *AP_SSID = "Headroom-Setup";
-static const char *AP_PSK  = "claudepi";
+static const char *AP_PSK  = "headroom";
 static const int   API_PORT = 8080;   // what the companion probes
 
 // ------------------------------------------------------------ small helpers
@@ -267,25 +267,77 @@ static void handlePush() {
   drawMeters();
 }
 
-// Wi-Fi provisioning portal (AP mode)
+// Wi-Fi provisioning portal (AP mode). The page fetches /scan for a tappable
+// list of nearby networks so nothing has to be typed by hand (manual entry
+// stays as a fallback).
 static const char PORTAL_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Headroom Wi-Fi setup</title>
-<style>body{font-family:system-ui;background:#f0eee6;color:#3d3929;padding:24px 18px}
+<style>body{font-family:system-ui;background:#f0eee6;color:#3d3929;padding:24px 18px;margin:0}
 .card{background:#faf9f5;border:1px solid rgba(61,57,41,.12);border-radius:14px;padding:16px;max-width:420px;margin:0 auto}
+h2{margin:.2rem 0 .6rem}p{margin:.4rem 0}
 input{width:100%;padding:12px;font-size:1rem;border-radius:10px;border:1px solid rgba(61,57,41,.25);margin:6px 0 12px;box-sizing:border-box}
-button{display:block;width:100%;background:#d97757;color:#fff;font-weight:600;font-size:1.05rem;padding:14px;border-radius:10px;border:none}</style>
+button{display:block;width:100%;background:#d97757;color:#fff;font-weight:600;font-size:1.05rem;padding:14px;border-radius:10px;border:none}
+#list{margin:6px 0 12px}
+.net{background:#fff;color:#3d3929;text-align:left;font-weight:500;font-size:1rem;padding:12px 14px;margin:6px 0;border:1px solid rgba(61,57,41,.18);border-radius:10px;display:flex;justify-content:space-between;align-items:center}
+.net.sel{border-color:#d97757;background:#fbeee8}
+.net .bars{color:#94907e;font-size:.85rem;margin-left:10px}
+.row{display:flex;gap:8px;align-items:center;margin:6px 0}
+.row button{width:auto;padding:8px 12px;font-size:.9rem;background:#e9e6dc;color:#3d3929}
+.muted{color:#94907e;font-size:.9rem}</style>
 </head><body><div class="card">
 <h2>Connect Headroom to Wi-Fi</h2>
-<p>Enter your home network. The device will reboot and join it.</p>
+<div class="row"><strong>Pick your network</strong>
+<button type="button" id="rescan">Rescan</button></div>
+<div id="list" class="muted">Scanning&hellip;</div>
 <form method="POST" action="/wifi">
-<input name="ssid" placeholder="Network name (SSID)" autocapitalize="off">
-<input name="password" type="password" placeholder="Password">
+<input name="ssid" id="ssid" placeholder="Network name (SSID)" autocapitalize="off" autocorrect="off">
+<input name="password" id="pw" type="password" placeholder="Wi-Fi password">
 <button type="submit">Connect</button></form>
-</div></body></html>)HTML";
+<p class="muted">Not listed? Type the name above.</p>
+</div>
+<script>
+function bars(r){var n=r>=-55?4:r>=-65?3:r>=-75?2:1;return '•'.repeat(n)+'·'.repeat(4-n);}
+function pick(el,ssid){document.querySelectorAll('.net').forEach(function(x){x.classList.remove('sel');});
+el.classList.add('sel');document.getElementById('ssid').value=ssid;document.getElementById('pw').focus();}
+function load(){var L=document.getElementById('list');L.textContent='Scanning…';L.className='muted';
+fetch('/scan').then(function(r){return r.json();}).then(function(nets){
+if(!nets.length){L.textContent='No networks found. Type the name below.';return;}
+L.innerHTML='';L.className='';
+nets.forEach(function(n){var b=document.createElement('button');b.type='button';b.className='net';
+b.innerHTML='<span>'+(n.lock?'🔒 ':'')+n.ssid.replace(/</g,'&lt;')+'</span><span class="bars">'+bars(n.rssi)+'</span>';
+b.onclick=function(){pick(b,n.ssid);};L.appendChild(b);});
+}).catch(function(){L.textContent='Scan failed — type your network below.';});}
+document.getElementById('rescan').onclick=load;load();
+</script>
+</body></html>)HTML";
 
 static void handlePortal() { server->send(200, "text/html", PORTAL_HTML); }
+
+// Return nearby networks as JSON: [{"ssid","rssi","lock"}...], strongest first,
+// deduped by name. Runs in AP+STA mode so the phone stays connected mid-scan.
+static void handleScan() {
+  int n = WiFi.scanNetworks(false /*async*/, false /*hidden*/);
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  for (int i = 0; i < n && arr.size() < 24; i++) {
+    String ssid = WiFi.SSID(i);
+    if (ssid.length() == 0) continue;
+    bool dup = false;
+    for (JsonObject o : arr)
+      if (ssid == (const char *)(o["ssid"] | "")) { dup = true; break; }
+    if (dup) continue;
+    JsonObject o = arr.add<JsonObject>();
+    o["ssid"] = ssid;
+    o["rssi"] = WiFi.RSSI(i);
+    o["lock"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+  }
+  WiFi.scanDelete();
+  String out;
+  serializeJson(doc, out);
+  sendJson(200, out);
+}
 
 static void handleWifiSave() {
   String ssid = server->arg("ssid");
@@ -310,22 +362,26 @@ static void handleWifiSave() {
 
 static void startPortal() {
   apMode = true;
-  WiFi.mode(WIFI_AP);
+  // AP+STA so WiFi.scanNetworks() can list nearby networks for the setup page
+  // without dropping the phone off our hotspot.
+  WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(AP_SSID, AP_PSK);
+  WiFi.disconnect();                            // STA idle, just here for scans
   dns.start(53, "*", WiFi.softAPIP());          // captive: everything -> us
   server = new WebServer(80);
   server->onNotFound(handlePortal);
   server->on("/", HTTP_GET, handlePortal);
+  server->on("/scan", HTTP_GET, handleScan);
   server->on("/wifi", HTTP_POST, handleWifiSave);
   server->begin();
   gfx->fillScreen(C_BG);
-  drawCentered("Wi-Fi setup", 60, 3, C_INK);
-  drawCentered("On your phone, join:", 130, 1, C_MUTED);
-  drawCentered(AP_SSID, 150, 2, C_ACC);
-  char buf[40];
-  snprintf(buf, sizeof(buf), "password: %s", AP_PSK);
-  drawCentered(buf, 180, 1, C_INK);
-  drawCentered("then open http://192.168.4.1", 205, 1, C_MUTED);
+  drawCentered("Wi-Fi setup", 40, 3, C_INK);
+  drawCentered("On your phone, join this Wi-Fi:", 96, 1, C_MUTED);
+  drawCentered(AP_SSID, 120, 2, C_ACC);
+  drawCentered("password", 165, 1, C_MUTED);
+  drawCentered(AP_PSK, 185, 3, C_INK);          // big so it's easy to read
+  drawCentered("then open", 240, 1, C_MUTED);
+  drawCentered("http://192.168.4.1", 260, 2, C_ACC);
 }
 
 static void startApi() {

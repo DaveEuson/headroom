@@ -30,7 +30,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOTSPOT_SSID = "Headroom-Setup"
-HOTSPOT_PSK = "claudepi"          # printed on the device screen
+HOTSPOT_PSK = "headroom"          # printed on the device screen
 HOTSPOT_CON = "ctp-hotspot"
 PORTAL_IP = "10.42.0.1"           # NetworkManager's shared-mode gateway
 CONTROL_PORT = 8079               # localhost API for the dashboard
