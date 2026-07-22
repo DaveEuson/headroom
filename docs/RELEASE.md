@@ -49,9 +49,9 @@ Fixed URLs the site depends on (resolve once a Release exists):
        - Open `http://<board-ip>:8080` → styled landing page loads.
        - Download a companion binary from the page and confirm it feeds the
          board (`--pi`, or auto-discovered).
-       - **Pair (self-contained):** `HeadroomCompanion --pair http://<board-ip>:8080`
-         → status flips to "Running self-contained" and meters update with no
-         companion running. (`/connect` manual paste still works as a fallback.)
+       - **Pair (self-contained):** `HeadroomCompanion --pair` (auto-finds the
+         board) → status flips to "Running self-contained" and meters update
+         with no companion running. (`/connect` manual paste is the fallback.)
        - `/alerts` → set an ntfy topic → **Send test alert** lands on a phone.
 
 ## Release notes template

@@ -628,17 +628,26 @@ def main():
     ap.add_argument("--token", default=cfg["token"])
     ap.add_argument("--interval", type=int, default=cfg["interval"])
     ap.add_argument("--once", action="store_true", help="push once and exit")
-    ap.add_argument("--pair", metavar="URL",
+    ap.add_argument("--pair", nargs="?", const="", default=None, metavar="URL",
                     help="send this computer's Claude login to a board so it "
-                         "runs self-contained, then exit")
+                         "runs self-contained, then exit (board auto-found if "
+                         "no URL is given)")
     ap.add_argument("--no-install", action="store_true",
                     help="don't add to startup")
     ap.add_argument("--uninstall", action="store_true",
                     help="remove from startup and exit")
     args = ap.parse_args()
 
-    if args.pair:
-        sys.exit(0 if pair_device(args.pair) else 1)
+    if args.pair is not None:
+        url = args.pair
+        if not url:
+            print("Looking for your board on the network...")
+            url = discover_pi()
+        if not url:
+            ap.error("couldn't find a board on your network. Make sure it's "
+                     "powered on and on the same Wi-Fi, or pass the address "
+                     "shown on its screen: --pair http://<its-address>:8080")
+        sys.exit(0 if pair_device(url) else 1)
 
     if args.uninstall:
         removed = uninstall_autostart()
