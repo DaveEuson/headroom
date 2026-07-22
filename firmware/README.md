@@ -89,11 +89,12 @@ top (flip to 0 in `src/main.cpp` if you mount it the other way up).
   on-device: paste a login once at `/connect`, token refreshed on-device, no
   companion. TLS currently runs without cert pinning (`setInsecure`) — fine on
   a trusted home network; pin a CA bundle before shipping if that matters.
-- **Phase 3 — polish.** Battery gauge (VBAT on GPIO5 via the 200K/100K
-  divider) shown on every screen, and usage history stored in flash with a
-  graph screen — both done. Charge state is inferred from voltage (no
-  charge-status line on this board). Still open: phone push alerts (the board
-  has no speaker, but ntfy/Pushover works from anywhere).
+- **Phase 3 — polish (done).** Battery gauge (VBAT on GPIO5 via the 200K/100K
+  divider) shown on every screen; usage history stored in flash with a graph
+  screen; and phone push alerts — open `http://<board-ip>/alerts`, enter an
+  **ntfy** topic (or Pushover keys) and a threshold, and the board pushes when
+  a window crosses it (with a recovery notice). Charge state is inferred from
+  voltage (no charge-status line on this board).
 
 ## Notes
 

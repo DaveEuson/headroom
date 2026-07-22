@@ -22,6 +22,7 @@
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <math.h>
+#include <ctype.h>
 #include <time.h>
 
 // ---------------------------------------------------------------- pins / lcd
@@ -399,6 +400,99 @@ static void drawScreen() {
   else                    drawMeters();
 }
 
+// ------------------------------------------------------------ phone alerts
+// POST to ntfy (and/or Pushover) when a window crosses a threshold. The board
+// has no speaker, but a phone push reaches you anywhere. Edge-triggered with a
+// recovery notice, so you get one "low" and one "recovered" per window.
+
+static String ntfyTopic, poToken, poUser;
+static int    alertPct = 90;              // notify at/above this % used
+struct AlertState { char key[24]; bool over; };
+static AlertState alertStates[MAX_WINDOWS] = {};
+
+static bool alertsConfigured() {
+  return ntfyTopic.length() > 0 || (poToken.length() > 0 && poUser.length() > 0);
+}
+
+static String urlEncode(const String &s) {
+  String o;
+  char b[4];
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '~')
+      o += c;
+    else if (c == ' ') o += "%20";
+    else { snprintf(b, sizeof(b), "%%%02X", (unsigned char)c); o += b; }
+  }
+  return o;
+}
+
+static void sendNtfy(const char *title, const char *body) {
+  if (ntfyTopic.length() == 0) return;
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient h;
+  if (!h.begin(client, "https://ntfy.sh/" + ntfyTopic)) return;
+  h.addHeader("Title", title);
+  h.addHeader("Content-Type", "text/plain");
+  h.POST(String(body));
+  h.end();
+}
+
+static void sendPushover(const char *title, const char *body) {
+  if (poToken.length() == 0 || poUser.length() == 0) return;
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient h;
+  if (!h.begin(client, "https://api.pushover.net/1/messages.json")) return;
+  h.addHeader("Content-Type", "application/x-www-form-urlencoded");
+  String form = "token=" + urlEncode(poToken) + "&user=" + urlEncode(poUser) +
+                "&title=" + urlEncode(title) + "&message=" + urlEncode(body);
+  h.POST(form);
+  h.end();
+}
+
+static void sendAlert(const char *title, const char *body) {
+  if (WiFi.status() != WL_CONNECTED) return;
+  sendNtfy(title, body);
+  sendPushover(title, body);
+}
+
+// Edge-triggered per window: fire once on crossing up, once on recovery.
+static void checkAlerts() {
+  if (!alertsConfigured()) return;
+  for (int i = 0; i < nWindows; i++) {
+    Window &w = windows[i];
+    int used = (int)(w.utilization + 0.5f);
+    AlertState *st = nullptr;
+    for (AlertState &a : alertStates)
+      if (a.key[0] && !strcmp(a.key, w.key)) { st = &a; break; }
+    if (!st)
+      for (AlertState &a : alertStates)
+        if (!a.key[0]) { strlcpy(a.key, w.key, sizeof(a.key)); a.over = false; st = &a; break; }
+    if (!st) continue;
+    char body[80];
+    if (used >= alertPct && !st->over) {
+      st->over = true;
+      snprintf(body, sizeof(body), "%s at %d%% used", w.label, used);
+      sendAlert("Headroom", body);
+    } else if (used < alertPct - 10 && st->over) {
+      st->over = false;
+      snprintf(body, sizeof(body), "%s recovered (%d%% used)", w.label, used);
+      sendAlert("Headroom", body);
+    }
+  }
+}
+
+static void saveAlerts() {
+  prefs.begin("headroom", false);
+  prefs.putString("ntfy", ntfyTopic);
+  prefs.putString("potok", poToken);
+  prefs.putString("pouser", poUser);
+  prefs.putInt("alpct", alertPct);
+  prefs.end();
+}
+
 // ------------------------------------------------------------------ web api
 
 static void sendJson(int code, const String &body) {
@@ -457,6 +551,7 @@ static void handlePush() {
   strlcpy(plan, doc["plan"] | "", sizeof(plan));
   lastPushMs = millis();
   sendJson(200, "{\"ok\":true}");
+  checkAlerts();
   drawScreen();
 }
 
@@ -730,6 +825,10 @@ static void loadCreds() {
   tokenExpMs = prefs.getULong64("exp", 0);
   strlcpy(plan, prefs.getString("plan", "").c_str(), sizeof(plan));
   showUsed   = prefs.getBool("used", false);
+  ntfyTopic  = prefs.getString("ntfy", "");
+  poToken    = prefs.getString("potok", "");
+  poUser     = prefs.getString("pouser", "");
+  alertPct   = prefs.getInt("alpct", 90);
   prefs.end();
   selfHosted = accessTok.length() > 0;
 }
@@ -833,6 +932,7 @@ static bool fetchUsage(bool allowRefresh) {
   }
   if (nWindows == 0) return false;
   lastPushMs = millis();
+  checkAlerts();
   drawScreen();
   return true;
 }
@@ -931,6 +1031,75 @@ static void handleDisconnect() {
   prefs.end();
   nWindows = 0;
   server->send(200, "text/html", "<p>Disconnected. <a href=/connect>back</a></p>");
+}
+
+// ---- /alerts: phone push when usage gets high (ntfy topic / Pushover keys) --
+
+static void handleAlertsPage() {
+  char pct[8];
+  snprintf(pct, sizeof(pct), "%d", alertPct);
+  String s = F(
+      "<!DOCTYPE html><html><head><meta charset=utf-8>"
+      "<meta name=viewport content='width=device-width,initial-scale=1'>"
+      "<title>Headroom - phone alerts</title><style>"
+      "body{font-family:system-ui;background:#f0eee6;color:#3d3929;padding:22px 16px;margin:0}"
+      ".card{background:#faf9f5;border:1px solid rgba(61,57,41,.12);border-radius:14px;"
+      "padding:16px;max-width:520px;margin:0 auto}h2{margin:.2rem 0 .6rem}label{font-size:.9rem}"
+      "input{width:100%;padding:11px;font-size:1rem;border-radius:10px;"
+      "border:1px solid rgba(61,57,41,.25);margin:4px 0 12px;box-sizing:border-box}"
+      "button{background:#d97757;color:#fff;font-weight:600;font-size:1rem;padding:12px 18px;"
+      "border:none;border-radius:10px}code{background:rgba(61,57,41,.07);padding:1px 5px;border-radius:5px}"
+      ".muted{color:#94907e;font-size:.85rem}</style></head><body><div class=card>"
+      "<h2>Phone alerts</h2>"
+      "<p>Get a push when a window gets high. Easiest is <b>ntfy</b>: install "
+      "the free ntfy app, pick any topic name, and enter it below.</p>"
+      "<form method=POST action=/alerts>"
+      "<label>ntfy topic</label>"
+      "<input name=ntfy value='");
+  s += ntfyTopic;
+  s += F("' placeholder='e.g. headroom-dave-9f3'>"
+         "<label>Alert at what % used?</label>"
+         "<input name=pct type=number min=50 max=100 value='");
+  s += pct;
+  s += F("'>"
+         "<details><summary class=muted>Pushover instead (optional)</summary>"
+         "<label>Pushover API token</label>"
+         "<input name=potok placeholder='");
+  s += poToken.length() ? F("(saved - leave blank to keep)") : F("");
+  s += F("'><label>Pushover user key</label><input name=pouser placeholder='");
+  s += poUser.length() ? F("(saved - leave blank to keep)") : F("");
+  s += F("'></details>"
+         "<button type=submit>Save</button></form>"
+         "<form method=POST action=/alerts/test style='margin-top:10px'>"
+         "<button style='background:#8a8577'>Send test alert</button></form>"
+         "<p class=muted>Recovery notice fires when it drops ~10% below the "
+         "threshold.</p></div></body></html>");
+  server->send(200, "text/html", s);
+}
+
+static void handleAlertsSave() {
+  ntfyTopic = server->arg("ntfy");
+  ntfyTopic.trim();
+  int p = server->arg("pct").toInt();
+  if (p >= 50 && p <= 100) alertPct = p;
+  String pt = server->arg("potok"); pt.trim();
+  String pu = server->arg("pouser"); pu.trim();
+  if (pt.length()) poToken = pt;      // blank keeps the saved value
+  if (pu.length()) poUser = pu;
+  saveAlerts();
+  server->send(200, "text/html",
+               "<p>Saved. <a href=/alerts>back</a></p>");
+}
+
+static void handleAlertsTest() {
+  if (!alertsConfigured()) {
+    server->send(200, "text/html",
+                 "<p>Set a topic or keys first. <a href=/alerts>back</a></p>");
+    return;
+  }
+  sendAlert("Headroom", "Test alert - notifications are working.");
+  server->send(200, "text/html",
+               "<p>Sent - check your phone. <a href=/alerts>back</a></p>");
 }
 
 // -------------------------------------------------------------- input helpers
@@ -1123,11 +1292,15 @@ static void startApi() {
   server->on("/connect", HTTP_GET, handleConnectPage);
   server->on("/connect", HTTP_POST, handleConnectSave);
   server->on("/disconnect", HTTP_POST, handleDisconnect);
+  server->on("/alerts", HTTP_GET, handleAlertsPage);
+  server->on("/alerts", HTTP_POST, handleAlertsSave);
+  server->on("/alerts/test", HTTP_POST, handleAlertsTest);
   server->on("/", HTTP_GET, []() {
     server->send(200, "text/html",
                  "<h1>Headroom Mini</h1>"
                  "<p><b><a href=/connect>Connect your Claude account</a></b> to "
                  "run self-contained (no computer needed).</p>"
+                 "<p><a href=/alerts>Phone alerts</a> when usage gets high.</p>"
                  "<p>Or feed it from a computer: run the Headroom companion with "
                  "--pi http://" + WiFi.localIP().toString() + ":8080</p>");
   });
