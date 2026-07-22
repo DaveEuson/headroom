@@ -76,13 +76,15 @@ top (flip to 0 in `src/main.cpp` if you mount it the other way up).
 ## Roadmap
 
 - **v0 (this)** — screen + Wi-Fi + companion-fed meters. Bring-up day.
-- **Phase 1.5 — touch & motion.** The hardware's already there (CST816D
-  capacitive touch on I2C 48/47, plus a 6-axis IMU):
-  - **Tap** → cycle screens: meters → history graph → phone QR
-  - **Long-press** → toggle % left / % used, brightness
-  - **IMU auto-rotate** → portrait/landscape follows how it sits on the desk
-  - **Face-down to dim**, shake to wake
-  - **BOOT button held 5s** → factory-reset Wi-Fi
+- **Phase 1.5 — touch & motion (done).** CST816D capacitive touch + QMI8658
+  IMU on the shared I2C bus (SDA 48 / SCL 47):
+  - **Tap / swipe L-R** → cycle screens (all meters ↔ big focus meter)
+  - **Long-press** → toggle % left / % used (saved)
+  - **Swipe up / down** → brightness
+  - **Face-down** → screen off; **face-up / shake** → wake
+  - **BOOT held ~5s** → factory-reset Wi-Fi + login
+  - Both sensors degrade gracefully — if a chip isn't found its feature is
+    simply off. IMU auto-rotate isn't wired yet (mounting-dependent).
 - **Phase 2 — self-contained (done).** Polls Anthropic's usage endpoint
   on-device: paste a login once at `/connect`, token refreshed on-device, no
   companion. TLS currently runs without cert pinning (`setInsecure`) — fine on

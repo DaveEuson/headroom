@@ -20,6 +20,8 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
+#include <Wire.h>
+#include <math.h>
 #include <time.h>
 
 // ---------------------------------------------------------------- pins / lcd
@@ -848,6 +850,123 @@ static void checkBootButton() {
   }
 }
 
+// ------------------------------------------------------------- touch + motion
+// Shared I2C bus (SDA 48 / SCL 47, 400 kHz): CST816D touch @ 0x15 (polled,
+// no INT/RST), QMI8658 6-axis IMU @ 0x6B. Register maps verified against the
+// Waveshare ESP-IDF demo + community drivers. Both degrade gracefully: if a
+// chip isn't found, its feature is simply disabled.
+
+static const int     I2C_SDA    = 48;
+static const int     I2C_SCL    = 47;
+static const uint8_t TOUCH_ADDR = 0x15;
+static const uint8_t IMU_ADDR_A = 0x6B;   // Waveshare default (SA0 high)
+static const uint8_t IMU_ADDR_B = 0x6A;   // fallback
+static uint8_t imuAddr  = 0;
+static bool    touchOk  = false;
+static bool    imuOk    = false;
+
+static bool i2cRead(uint8_t addr, uint8_t reg, uint8_t *buf, uint8_t n) {
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return false;   // repeated start
+  if (Wire.requestFrom((int)addr, (int)n) != n) return false;
+  for (uint8_t i = 0; i < n; i++) buf[i] = Wire.read();
+  return true;
+}
+
+static void i2cWrite(uint8_t addr, uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  Wire.write(val);
+  Wire.endTransmission();
+}
+
+static void sensorsBegin() {
+  Wire.begin(I2C_SDA, I2C_SCL, 400000);
+  Wire.beginTransmission(TOUCH_ADDR);
+  touchOk = (Wire.endTransmission() == 0);
+  uint8_t imuCandidates[2] = {IMU_ADDR_A, IMU_ADDR_B};
+  for (uint8_t a : imuCandidates) {
+    uint8_t who = 0;
+    if (i2cRead(a, 0x00, &who, 1) && who == 0x05) { imuAddr = a; imuOk = true; break; }
+  }
+  if (imuOk) {
+    i2cWrite(imuAddr, 0x02, 0x60);   // CTRL1: addr auto-increment, little-endian
+    i2cWrite(imuAddr, 0x03, 0x13);   // CTRL2: accel +/-4g  (8192 LSB/g)
+    i2cWrite(imuAddr, 0x08, 0x01);   // CTRL7: accelerometer enable
+  }
+}
+
+static void wake() { screenOff = false; setBacklight(backlight); }
+
+static void cycleScreen(int dir) {
+  uiScreen = (uiScreen + dir + UI_SCREENS) % UI_SCREENS;
+  drawScreen();
+}
+
+static void bumpBrightness(int d) {
+  int v = (int)backlight + d;
+  if (v < 25) v = 25;
+  if (v > 255) v = 255;
+  screenOff = false;
+  setBacklight((uint8_t)v);
+}
+
+// CST816 gesture codes: 1 up, 2 down, 3 left, 4 right, 5 tap, 0x0B dbl, 0x0C long
+static void dispatchGesture(uint8_t g) {
+  if (screenOff) { wake(); return; }        // a dimmed screen wakes on any touch
+  switch (g) {
+    case 0x0C: toggleUsedMode();   break;   // long press -> % left / % used
+    case 0x01: bumpBrightness(+40); break;  // swipe up   -> brighter
+    case 0x02: bumpBrightness(-40); break;  // swipe down -> dimmer
+    case 0x03: cycleScreen(-1);    break;   // swipe left
+    case 0x04: cycleScreen(+1);    break;   // swipe right
+    default:   cycleScreen(+1);             // tap -> next screen
+  }
+}
+
+// Poll the touch controller; dispatch on finger release using the strongest
+// gesture seen during the press (handles tap / long-press / swipe uniformly).
+static void pollTouch() {
+  if (!touchOk) return;
+  uint8_t b[6];
+  if (!i2cRead(TOUCH_ADDR, 0x01, b, 6)) return;
+  uint8_t gesture = b[0], finger = b[1];
+  static bool touching = false;
+  static uint8_t lastG = 0;
+  if (finger == 1) {
+    touching = true;
+    if (gesture != 0) lastG = gesture;
+  } else if (finger == 0 && touching) {
+    dispatchGesture(lastG);                 // lastG 0 -> default tap
+    touching = false;
+    lastG = 0;
+  }
+}
+
+// Accelerometer: face-down dims, face-up restores, a shake wakes.
+static void pollMotion() {
+  if (!imuOk) return;
+  uint8_t b[6];
+  if (!i2cRead(imuAddr, 0x35, b, 6)) return;
+  float gx = (int16_t)((b[1] << 8) | b[0]) / 8192.0f;
+  float gy = (int16_t)((b[3] << 8) | b[2]) / 8192.0f;
+  float gz = (int16_t)((b[5] << 8) | b[4]) / 8192.0f;
+  float mag = sqrtf(gx * gx + gy * gy + gz * gz);
+
+  if (fabsf(mag - 1.0f) > 0.8f) {           // shake
+    if (screenOff) wake();
+    return;
+  }
+  static int downCount = 0;
+  if (gz < -0.6f) {                          // face down
+    if (++downCount > 3 && !screenOff) { screenOff = true; setBacklight(backlight); }
+  } else if (gz > 0.2f) {                    // face up again
+    downCount = 0;
+    if (screenOff) wake();
+  }
+}
+
 // -------------------------------------------------------------------- setup
 
 static void startPortal() {
@@ -907,6 +1026,7 @@ void setup() {
   setBacklight(255);
   gfx->begin(40000000);
   drawSplash("starting...", nullptr);
+  sensorsBegin();                    // touch + IMU on the shared I2C bus
 
   prefs.begin("headroom", true);
   String ssid = prefs.getString("ssid", "");
@@ -954,6 +1074,10 @@ void loop() {
     dns.processNextRequest();
     return;
   }
+  static unsigned long lastTouch = 0, lastMotion = 0;
+  if (millis() - lastTouch > 50)   { lastTouch = millis();  pollTouch(); }
+  if (millis() - lastMotion > 400) { lastMotion = millis(); pollMotion(); }
+
   static unsigned long lastTick = 0;
   if (millis() - lastTick > 30000) {   // refresh clock/countdowns
     lastTick = millis();
