@@ -72,6 +72,7 @@ static bool apMode = false;
 static const char *AP_SSID = "Headroom-Setup";
 static const char *AP_PSK  = "headroom";
 static const int   API_PORT = 8080;   // what the companion probes
+static const char *FW_VERSION = "0.1";
 
 // ------------------------------------------------------------ small helpers
 
@@ -358,6 +359,176 @@ static void handleWifiSave() {
   ESP.restart();
 }
 
+// ---------------------------------------------------- Improv Wi-Fi (serial)
+// Lets the browser flasher (ESP Web Tools) provision Wi-Fi over the same USB
+// cable used to flash — the browser asks for your network right after Install
+// and sends it down the wire. No hotspot, no typing an address.
+// Protocol: https://www.improv-wifi.com/serial/
+
+namespace improv {
+enum Type : uint8_t { T_CURRENT_STATE = 0x01, T_ERROR = 0x02,
+                      T_RPC = 0x03, T_RPC_RESPONSE = 0x04 };
+enum State : uint8_t { S_AUTHORIZED = 0x02, S_PROVISIONING = 0x03,
+                       S_PROVISIONED = 0x04 };
+enum Err : uint8_t { E_NONE = 0x00, E_INVALID_RPC = 0x01, E_UNKNOWN_RPC = 0x02,
+                     E_CANNOT_CONNECT = 0x03, E_UNKNOWN = 0xFF };
+enum Cmd : uint8_t { C_WIFI_SETTINGS = 0x01, C_REQUEST_STATE = 0x02,
+                     C_REQUEST_INFO = 0x03, C_REQUEST_SCAN = 0x04 };
+static const char HEADER[6] = {'I', 'M', 'P', 'R', 'O', 'V'};
+}  // namespace improv
+
+static uint8_t improvRx[288];
+static size_t improvPos = 0;
+
+// Frame and emit one Improv packet: IMPROV + ver + type + len + data + cksum.
+static void improvSend(uint8_t type, const uint8_t *data, uint8_t len) {
+  uint8_t pkt[288];
+  size_t n = 0;
+  memcpy(pkt, improv::HEADER, 6); n = 6;
+  pkt[n++] = 1;             // protocol version
+  pkt[n++] = type;
+  pkt[n++] = len;
+  for (uint8_t i = 0; i < len; i++) pkt[n++] = data[i];
+  uint32_t sum = 0;
+  for (size_t i = 0; i < n; i++) sum += pkt[i];
+  pkt[n++] = (uint8_t)(sum & 0xFF);
+  Serial.write(pkt, n);
+  Serial.write('\n');
+}
+
+static void improvSendState(uint8_t s) { improvSend(improv::T_CURRENT_STATE, &s, 1); }
+static void improvSendError(uint8_t e) { improvSend(improv::T_ERROR, &e, 1); }
+
+// RPC response: [cmd][blobLen][ (len-prefixed string)* ].
+static void improvSendResult(uint8_t cmd, const char *const *strs, uint8_t nstrs) {
+  uint8_t d[256];
+  size_t n = 0;
+  d[n++] = cmd;
+  size_t lenAt = n++;       // filled in once the strings are laid down
+  size_t start = n;
+  for (uint8_t i = 0; i < nstrs; i++) {
+    uint8_t sl = (uint8_t)strlen(strs[i]);
+    if (n + 1 + sl > sizeof(d)) break;
+    d[n++] = sl;
+    memcpy(d + n, strs[i], sl); n += sl;
+  }
+  d[lenAt] = (uint8_t)(n - start);
+  improvSend(improv::T_RPC_RESPONSE, d, (uint8_t)n);
+}
+
+// The device URL the browser should open once we're online.
+static void improvSendURL() {
+  char url[48];
+  snprintf(url, sizeof(url), "http://%s", WiFi.localIP().toString().c_str());
+  const char *urls[1] = {url};
+  improvSendResult(improv::C_WIFI_SETTINGS, urls, 1);
+}
+
+// One RPC result per network, then an empty result to mark the end. Lets the
+// browser show a dropdown so only the password has to be typed.
+static void improvSendScan() {
+  int n = WiFi.scanNetworks();
+  for (int i = 0; i < n; i++) {
+    char ssid[33];
+    strlcpy(ssid, WiFi.SSID(i).c_str(), sizeof(ssid));
+    if (ssid[0] == 0) continue;
+    char rssi[8];
+    snprintf(rssi, sizeof(rssi), "%d", WiFi.RSSI(i));
+    const char *row[3] = {ssid, rssi,
+                          WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "NO" : "YES"};
+    improvSendResult(improv::C_REQUEST_SCAN, row, 3);
+  }
+  improvSendResult(improv::C_REQUEST_SCAN, nullptr, 0);
+  WiFi.scanDelete();
+}
+
+static void improvConnect(const char *ssid, const char *pass) {
+  improvSendState(improv::S_PROVISIONING);
+  gfx->fillScreen(C_BG);
+  drawCentered("Connecting to Wi-Fi", 120, 2, C_INK);
+  drawCentered(ssid, 158, 1, C_MUTED);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname("headroom");
+  WiFi.begin(ssid, pass);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) delay(200);
+
+  if (WiFi.status() != WL_CONNECTED) {
+    improvSendError(improv::E_CANNOT_CONNECT);
+    drawCentered("Couldn't connect - check password", 196, 1, C_CRIT);
+    return;
+  }
+  prefs.begin("headroom", false);
+  prefs.putString("ssid", ssid);
+  prefs.putString("psk", pass);
+  prefs.end();
+  improvSendState(improv::S_PROVISIONED);
+  improvSendURL();
+  Serial.flush();
+  delay(600);
+  ESP.restart();                 // reboot into the normal STA + API flow
+}
+
+static void improvDispatch() {
+  if (improvRx[7] != improv::T_RPC) return;   // we only handle commands
+  uint8_t cmd = improvRx[9];
+  uint8_t blob = improvRx[10];
+  const uint8_t *d = &improvRx[11];
+  switch (cmd) {
+    case improv::C_REQUEST_STATE: {
+      bool online = WiFi.status() == WL_CONNECTED;
+      improvSendState(online ? improv::S_PROVISIONED : improv::S_AUTHORIZED);
+      if (online) improvSendURL();
+      break;
+    }
+    case improv::C_REQUEST_INFO: {
+      const char *info[4] = {"Headroom Mini", FW_VERSION, "ESP32-S3", "Headroom"};
+      improvSendResult(improv::C_REQUEST_INFO, info, 4);
+      break;
+    }
+    case improv::C_REQUEST_SCAN:
+      improvSendScan();
+      break;
+    case improv::C_WIFI_SETTINGS: {
+      if (blob < 2) { improvSendError(improv::E_INVALID_RPC); break; }
+      uint8_t sl = d[0];
+      if (1 + sl + 1 > blob || sl > 64) { improvSendError(improv::E_INVALID_RPC); break; }
+      uint8_t pl = d[1 + sl];
+      if (2 + sl + pl > blob || pl > 64) { improvSendError(improv::E_INVALID_RPC); break; }
+      char ssid[65], pass[65];
+      memcpy(ssid, d + 1, sl); ssid[sl] = 0;
+      memcpy(pass, d + 2 + sl, pl); pass[pl] = 0;
+      improvConnect(ssid, pass);
+      break;
+    }
+    default:
+      improvSendError(improv::E_UNKNOWN_RPC);
+  }
+}
+
+// Feed one serial byte through the packet parser; dispatch on a valid frame.
+static void improvByte(uint8_t b) {
+  if (improvPos >= sizeof(improvRx)) improvPos = 0;
+  if (improvPos < 6) {                            // resync on the IMPROV header
+    if (b == (uint8_t)improv::HEADER[improvPos]) improvRx[improvPos++] = b;
+    else { improvPos = 0; if (b == 'I') improvRx[improvPos++] = b; }
+    return;
+  }
+  improvRx[improvPos++] = b;
+  if (improvPos < 9) return;                      // need version, type, length
+  size_t total = 9 + (size_t)improvRx[8] + 1;     // +data +checksum
+  if (improvPos < total) return;
+  uint32_t sum = 0;
+  for (size_t i = 0; i < total - 1; i++) sum += improvRx[i];
+  if ((uint8_t)(sum & 0xFF) == improvRx[total - 1]) improvDispatch();
+  improvPos = 0;
+}
+
+static void improvPoll() {
+  while (Serial.available()) improvByte((uint8_t)Serial.read());
+}
+
 // -------------------------------------------------------------------- setup
 
 static void startPortal() {
@@ -375,13 +546,18 @@ static void startPortal() {
   server->on("/wifi", HTTP_POST, handleWifiSave);
   server->begin();
   gfx->fillScreen(C_BG);
-  drawCentered("Wi-Fi setup", 40, 3, C_INK);
-  drawCentered("On your phone, join this Wi-Fi:", 96, 1, C_MUTED);
-  drawCentered(AP_SSID, 120, 2, C_ACC);
-  drawCentered("password", 165, 1, C_MUTED);
-  drawCentered(AP_PSK, 185, 3, C_INK);          // big so it's easy to read
-  drawCentered("then open", 240, 1, C_MUTED);
-  drawCentered("http://192.168.4.1", 260, 2, C_ACC);
+  drawCentered("Let's connect", 34, 3, C_INK);
+  // Primary path: the browser flasher provisions over USB (Improv).
+  drawCentered("Setting up in your browser?", 84, 1, C_INK);
+  drawCentered("Just enter your Wi-Fi there.", 104, 1, C_MUTED);
+  // Fallback path: phone hotspot.
+  drawCentered("- or from a phone -", 140, 1, C_MUTED);
+  drawCentered("join Wi-Fi", 164, 1, C_MUTED);
+  drawCentered(AP_SSID, 184, 2, C_ACC);
+  drawCentered("password", 216, 1, C_MUTED);
+  drawCentered(AP_PSK, 234, 3, C_INK);          // big so it's easy to read
+  drawCentered("then open http://192.168.4.1", 282, 1, C_MUTED);
+  improvSendState(improv::S_AUTHORIZED);        // announce we're ready
 }
 
 static void startApi() {
@@ -437,11 +613,13 @@ void setup() {
   tzset();
   startApi();
   drawMeters();
+  improvSendState(improv::S_PROVISIONED);   // in case the browser is listening
 }
 
 // --------------------------------------------------------------------- loop
 
 void loop() {
+  improvPoll();                     // browser can provision Wi-Fi over USB
   if (server) server->handleClient();
   if (apMode) {
     dns.processNextRequest();
