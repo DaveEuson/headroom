@@ -17,6 +17,26 @@ used right now — no terminal, no menubar, no estimating.
   <img src="docs/screenshots/night.png" width="380" alt="Night mode — dark Claude theme, Pip asleep">
 </p>
 
+## Two ways to build it
+
+**Headroom** (this page) — a **Raspberry Pi Zero 2 W** with a Whisplay HAT /
+PiSugar. The full build: web dashboard, kiosk LCD, 3D-printed case, and Pip the
+mascot.
+
+**[Headroom Mini](firmware/README.md)** — the same meters on a **~$26 Waveshare
+ESP32-S3-Touch-LCD-2**. No Raspberry Pi, no Linux, no soldering. Flash it from
+your **browser** (no VS Code or command line), hand it your Wi-Fi over the same
+USB cable, and it polls your usage on its own — or feed it from the same
+companion app. Capacitive touch, motion (face-down to sleep), a battery gauge,
+a usage-history graph, and phone push alerts are all built in.
+
+> **Set up a Mini:** open **https://daveeuson.github.io/headroom/** in Chrome or
+> Edge, plug the board in, and click **Connect &amp; Install** — then enter your
+> Wi-Fi right in the browser. Full details in
+> [`firmware/README.md`](firmware/README.md).
+
+The rest of this page is the Raspberry Pi build.
+
 ## What you get
 
 - **Meters and percentages** for every usage window Claude reports (5-hour
