@@ -1231,7 +1231,9 @@ static void pollTouch() {
   }
 }
 
-// Accelerometer: face-down dims, face-up restores, a shake wakes.
+// Accelerometer: flip-to-sleep and shake-to-wake. Self-calibrating — it takes
+// "normal" from how the board is sitting at the first read, so which way the
+// IMU's Z axis points (mounting-dependent on this board) doesn't matter.
 static void pollMotion() {
   if (!imuOk) return;
   uint8_t b[6];
@@ -1241,14 +1243,20 @@ static void pollMotion() {
   float gz = (int16_t)((b[5] << 8) | b[4]) / 8192.0f;
   float mag = sqrtf(gx * gx + gy * gy + gz * gz);
 
-  if (fabsf(mag - 1.0f) > 0.8f) {           // shake
+  static bool  restInit = false;
+  static float restZ = 1.0f;                 // gravity Z when sitting normally
+  if (!restInit) { restZ = gz; restInit = true; return; }
+
+  if (fabsf(mag - 1.0f) > 0.8f) {            // shake -> wake
     if (screenOff) wake();
     return;
   }
+  if (fabsf(restZ) < 0.5f) return;           // boots upright -> don't auto-dim
   static int downCount = 0;
-  if (gz < -0.6f) {                          // face down
+  float rel = gz * restZ;                     // >0 same as rest, <0 flipped over
+  if (rel < -0.4f) {                          // flipped from its resting face
     if (++downCount > 3 && !screenOff) { screenOff = true; setBacklight(backlight); }
-  } else if (gz > 0.2f) {                    // face up again
+  } else if (rel > 0.3f) {                    // back to normal
     downCount = 0;
     if (screenOff) wake();
   }
