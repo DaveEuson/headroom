@@ -89,6 +89,20 @@ static String   accessTok, refreshTok;
 static uint64_t tokenExpMs = 0;       // epoch ms, 0 = unknown
 static bool     selfHosted = false;   // true once a login is stored
 
+// UI / input state (Phase 1.5)
+static const int BL_CHANNEL = 0;      // LEDC channel for backlight PWM
+static const int BOOT_BTN    = 0;     // BOOT button -> hold to factory reset
+static uint8_t   backlight   = 255;   // 0..255
+static bool      showUsed    = false; // false = "% left", true = "% used"
+static bool      screenOff   = false; // face-down / manual dim
+static int       uiScreen    = 0;     // 0 = all meters, 1 = focus (big)
+static const int UI_SCREENS  = 2;
+
+static void setBacklight(uint8_t v) {
+  backlight = v;
+  ledcWrite(BL_CHANNEL, screenOff ? 0 : v);
+}
+
 // ------------------------------------------------------------ small helpers
 
 // Parse "YYYY-MM-DDTHH:MM:SS..." (assumed UTC) to epoch. Ignores the offset
@@ -191,7 +205,8 @@ static void drawMeters() {
     gfx->setCursor(12, y);
     gfx->print(w.label);
 
-    snprintf(buf, sizeof(buf), "%d%% left", (int)(left + 0.5f));
+    if (showUsed) snprintf(buf, sizeof(buf), "%d%% used", (int)(w.utilization + 0.5f));
+    else          snprintf(buf, sizeof(buf), "%d%% left", (int)(left + 0.5f));
     int16_t x1, y1; uint16_t tw, th;
     gfx->setTextSize(2);
     gfx->getTextBounds(buf, 0, 0, &x1, &y1, &tw, &th);
@@ -224,6 +239,44 @@ static void drawMeters() {
     gfx->print(WiFi.localIP().toString());
     gfx->print("  headroom.local");
   }
+}
+
+// Focus screen: the most-constrained window, big — glanceable across a room.
+static void drawFocus() {
+  gfx->fillScreen(C_BG);
+  if (nWindows == 0) { drawMeters(); return; }   // nothing to focus yet
+
+  int idx = 0;
+  for (int i = 1; i < nWindows; i++)
+    if (windows[i].utilization > windows[idx].utilization) idx = i;  // least left
+  Window &w = windows[idx];
+  float left = 100.0f - w.utilization;
+  if (left < 0) left = 0; if (left > 100) left = 100;
+  uint16_t fill = left <= 10 ? C_CRIT : left <= 30 ? C_WARN : C_ACC;
+
+  drawCentered(w.label, 44, 3, C_INK);
+
+  char buf[24];
+  int val = showUsed ? (int)(w.utilization + 0.5f) : (int)(left + 0.5f);
+  snprintf(buf, sizeof(buf), "%d%%", val);
+  drawCentered(buf, 108, 8, fill);
+  drawCentered(showUsed ? "used" : "left", 196, 2, C_MUTED);
+
+  // big progress bar
+  int barY = 232;
+  gfx->fillRoundRect(20, barY, 200, 18, 9, C_ACC_T);
+  int wpx = (int)(200.0f * left / 100.0f);
+  if (wpx < 10) wpx = 10;
+  gfx->fillRoundRect(20, barY, wpx, 18, 9, fill);
+
+  fmtCountdown(w.resets_at, buf, sizeof(buf));
+  drawCentered(buf, 272, 2, C_MUTED);
+}
+
+// Draw whichever screen is active (data updates / ticks call this).
+static void drawScreen() {
+  if (uiScreen == 1) drawFocus();
+  else               drawMeters();
 }
 
 // ------------------------------------------------------------------ web api
@@ -284,7 +337,7 @@ static void handlePush() {
   strlcpy(plan, doc["plan"] | "", sizeof(plan));
   lastPushMs = millis();
   sendJson(200, "{\"ok\":true}");
-  drawMeters();
+  drawScreen();
 }
 
 // Wi-Fi provisioning portal (AP mode). The page fetches /scan for a tappable
@@ -556,6 +609,7 @@ static void loadCreds() {
   refreshTok = prefs.getString("rtok", "");
   tokenExpMs = prefs.getULong64("exp", 0);
   strlcpy(plan, prefs.getString("plan", "").c_str(), sizeof(plan));
+  showUsed   = prefs.getBool("used", false);
   prefs.end();
   selfHosted = accessTok.length() > 0;
 }
@@ -659,7 +713,7 @@ static bool fetchUsage(bool allowRefresh) {
   }
   if (nWindows == 0) return false;
   lastPushMs = millis();
-  drawMeters();
+  drawScreen();
   return true;
 }
 
@@ -759,6 +813,41 @@ static void handleDisconnect() {
   server->send(200, "text/html", "<p>Disconnected. <a href=/connect>back</a></p>");
 }
 
+// -------------------------------------------------------------- input helpers
+
+static void toggleUsedMode() {
+  showUsed = !showUsed;
+  prefs.begin("headroom", false);
+  prefs.putBool("used", showUsed);
+  prefs.end();
+  drawScreen();
+}
+
+// Wipe saved Wi-Fi + login and reboot into the setup portal.
+static void factoryReset() {
+  prefs.begin("headroom", false);
+  prefs.clear();
+  prefs.end();
+  screenOff = false;
+  setBacklight(255);
+  gfx->fillScreen(C_BG);
+  drawCentered("Reset", 130, 3, C_WARN);
+  drawCentered("reconnect Wi-Fi to set up again", 175, 1, C_MUTED);
+  delay(1500);
+  ESP.restart();
+}
+
+// BOOT held ~5s -> factory reset. Cheap to poll every loop.
+static void checkBootButton() {
+  static unsigned long downSince = 0;
+  if (digitalRead(BOOT_BTN) == LOW) {
+    if (downSince == 0) downSince = millis();
+    else if (millis() - downSince > 5000) factoryReset();
+  } else {
+    downSince = 0;
+  }
+}
+
 // -------------------------------------------------------------------- setup
 
 static void startPortal() {
@@ -812,8 +901,10 @@ static void startApi() {
 
 void setup() {
   Serial.begin(115200);
-  pinMode(LCD_BL, OUTPUT);
-  digitalWrite(LCD_BL, HIGH);        // backlight on (active high on this board)
+  pinMode(BOOT_BTN, INPUT_PULLUP);   // hold 5s -> factory reset Wi-Fi
+  ledcSetup(BL_CHANNEL, 5000, 8);    // backlight PWM (active high on this board)
+  ledcAttachPin(LCD_BL, BL_CHANNEL);
+  setBacklight(255);
   gfx->begin(40000000);
   drawSplash("starting...", nullptr);
 
@@ -848,7 +939,7 @@ void setup() {
   tzset();
   loadCreds();
   startApi();
-  drawMeters();
+  drawScreen();
   improvSendState(improv::S_PROVISIONED);   // in case the browser is listening
   pollUsage();                              // first live read if self-hosted
 }
@@ -857,6 +948,7 @@ void setup() {
 
 void loop() {
   improvPoll();                     // browser can provision Wi-Fi over USB
+  checkBootButton();                // hold BOOT 5s -> factory reset
   if (server) server->handleClient();
   if (apMode) {
     dns.processNextRequest();
@@ -866,7 +958,7 @@ void loop() {
   if (millis() - lastTick > 30000) {   // refresh clock/countdowns
     lastTick = millis();
     if (!timeSynced && time(nullptr) > 1600000000) timeSynced = true;
-    drawMeters();
+    drawScreen();
   }
   static unsigned long lastPoll = 0;   // self-hosted: pull fresh usage
   if (selfHosted && millis() - lastPoll > POLL_INTERVAL_MS) {
