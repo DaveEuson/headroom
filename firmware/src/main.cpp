@@ -13,6 +13,8 @@
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <ESPmDNS.h>
@@ -73,6 +75,19 @@ static const char *AP_SSID = "Headroom-Setup";
 static const char *AP_PSK  = "headroom";
 static const int   API_PORT = 8080;   // what the companion probes
 static const char *FW_VERSION = "0.1";
+
+// Phase 2 — self-contained: poll Anthropic's usage endpoint directly, using an
+// OAuth login pasted once via /connect. Same contract the companion uses.
+static const char *CLIENT_ID   = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+static const char *REFRESH_URL = "https://platform.claude.com/v1/oauth/token";
+static const char *USAGE_URL   = "https://api.anthropic.com/api/oauth/usage";
+static const char *OAUTH_BETA  = "oauth-2025-04-20";
+static const char *UA          = "Headroom-Mini/0.1";
+static const unsigned long POLL_INTERVAL_MS = 5UL * 60UL * 1000UL;
+
+static String   accessTok, refreshTok;
+static uint64_t tokenExpMs = 0;       // epoch ms, 0 = unknown
+static bool     selfHosted = false;   // true once a login is stored
 
 // ------------------------------------------------------------ small helpers
 
@@ -149,13 +164,17 @@ static void drawMeters() {
   }
 
   if (nWindows == 0) {
-    bool stale = lastPushMs == 0;
-    drawCentered(stale ? "Waiting for the companion" : "No usage windows",
-                 150, 1, C_MUTED);
-    drawCentered("run it on your computer with", 170, 1, C_MUTED);
-    snprintf(buf, sizeof(buf), "--pi http://%s:%d",
-             WiFi.localIP().toString().c_str(), API_PORT);
-    drawCentered(buf, 190, 1, C_ACC);
+    if (selfHosted) {
+      drawCentered("Fetching your usage...", 150, 1, C_MUTED);
+    } else if (lastPushMs == 0) {
+      drawCentered("Connect your account:", 140, 1, C_MUTED);
+      snprintf(buf, sizeof(buf), "http://%s/connect",
+               WiFi.localIP().toString().c_str());
+      drawCentered(buf, 162, 1, C_ACC);
+      drawCentered("(or run the companion on your PC)", 186, 1, C_MUTED);
+    } else {
+      drawCentered("No usage windows", 150, 1, C_MUTED);
+    }
   }
 
   // meters: label / big % left / bar / countdown
@@ -200,7 +219,7 @@ static void drawMeters() {
   gfx->setCursor(10, 306);
   if (lastPushMs && millis() - lastPushMs > 10UL * 60UL * 1000UL) {
     gfx->setTextColor(C_WARN);
-    gfx->print("stale - companion quiet >10m");
+    gfx->print("stale - no update >10m");
   } else {
     gfx->print(WiFi.localIP().toString());
     gfx->print("  headroom.local");
@@ -529,6 +548,217 @@ static void improvPoll() {
   while (Serial.available()) improvByte((uint8_t)Serial.read());
 }
 
+// ------------------------------------------- Phase 2: on-device usage polling
+
+static void loadCreds() {
+  prefs.begin("headroom", true);
+  accessTok  = prefs.getString("atok", "");
+  refreshTok = prefs.getString("rtok", "");
+  tokenExpMs = prefs.getULong64("exp", 0);
+  strlcpy(plan, prefs.getString("plan", "").c_str(), sizeof(plan));
+  prefs.end();
+  selfHosted = accessTok.length() > 0;
+}
+
+static void saveCreds() {
+  prefs.begin("headroom", false);
+  prefs.putString("atok", accessTok);
+  prefs.putString("rtok", refreshTok);
+  prefs.putULong64("exp", tokenExpMs);
+  prefs.putString("plan", plan);
+  prefs.end();
+}
+
+// Exchange the rotating refresh token for a fresh access token, saving the new
+// pair back (the refresh token rotates — losing it means re-pasting the login).
+static bool refreshAccess() {
+  if (refreshTok.length() == 0) return false;
+  WiFiClientSecure client;
+  client.setInsecure();   // no on-device CA store; TLS without cert pinning
+  HTTPClient https;
+  if (!https.begin(client, REFRESH_URL)) return false;
+  https.addHeader("Content-Type", "application/json");
+  https.addHeader("User-Agent", UA);
+  JsonDocument body;
+  body["grant_type"]   = "refresh_token";
+  body["refresh_token"] = refreshTok;
+  body["client_id"]    = CLIENT_ID;
+  String out;
+  serializeJson(body, out);
+  int code = https.POST(out);
+  if (code != 200) { https.end(); return false; }
+  JsonDocument doc;
+  DeserializationError e = deserializeJson(doc, https.getString());
+  https.end();
+  if (e) return false;
+  const char *at = doc["access_token"].as<const char *>();
+  if (!at) return false;
+  accessTok = at;
+  const char *rt = doc["refresh_token"].as<const char *>();
+  if (rt) refreshTok = rt;
+  long ein = doc["expires_in"] | 0;
+  time_t now = time(nullptr);
+  tokenExpMs = (ein && now > 100000) ? (uint64_t)(now + ein) * 1000ULL : 0;
+  saveCreds();
+  return true;
+}
+
+// Map an Anthropic usage window key to a short label that fits a 2" screen.
+static const char *shortLabel(const char *key) {
+  if (!strcmp(key, "five_hour"))            return "Session";
+  if (!strcmp(key, "seven_day"))            return "Weekly";
+  if (!strcmp(key, "seven_day_opus"))       return "Opus";
+  if (!strcmp(key, "seven_day_sonnet"))     return "Sonnet";
+  if (!strcmp(key, "seven_day_oauth_apps")) return "Apps";
+  if (!strcmp(key, "extra_usage"))          return "Extra";
+  return "Usage";
+}
+
+// GET the usage endpoint, parse windows, redraw. Refreshes once on 401/403.
+static bool fetchUsage(bool allowRefresh) {
+  if (accessTok.length() == 0) return false;
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient https;
+  if (!https.begin(client, USAGE_URL)) return false;
+  https.addHeader("Authorization", "Bearer " + accessTok);
+  https.addHeader("anthropic-beta", OAUTH_BETA);
+  https.addHeader("Accept", "application/json");
+  https.addHeader("User-Agent", UA);
+  int code = https.GET();
+  if ((code == 401 || code == 403) && allowRefresh) {
+    https.end();
+    return refreshAccess() ? fetchUsage(false) : false;
+  }
+  if (code != 200) { https.end(); return false; }
+  String payload = https.getString();
+  https.end();
+
+  JsonDocument doc;
+  if (deserializeJson(doc, payload)) return false;
+  JsonObject root = doc.as<JsonObject>();
+  if (root.isNull()) return false;
+
+  // Fixed display order, mirroring the companion's ordering.
+  static const char *const ORDER[] = {
+      "five_hour", "seven_day", "seven_day_sonnet",
+      "seven_day_opus", "seven_day_oauth_apps", "extra_usage"};
+  nWindows = 0;
+  for (const char *key : ORDER) {
+    if (nWindows >= MAX_WINDOWS) break;
+    JsonVariant v = root[key];
+    if (!v.is<JsonObject>() || v["utilization"].isNull()) continue;
+    Window &w = windows[nWindows++];
+    strlcpy(w.key, key, sizeof(w.key));
+    strlcpy(w.label, shortLabel(key), sizeof(w.label));
+    float u = v["utilization"].as<float>();
+    w.utilization = u < 0 ? 0 : (u > 100 ? 100 : u);
+    const char *r = v["resets_at"].as<const char *>();
+    if (!r) r = v["resetsAt"].as<const char *>();
+    w.resets_at = parseISO(r);
+  }
+  if (nWindows == 0) return false;
+  lastPushMs = millis();
+  drawMeters();
+  return true;
+}
+
+static void pollUsage() {
+  if (selfHosted && WiFi.status() == WL_CONNECTED) fetchUsage(true);
+}
+
+// ---- /connect web page: paste a Claude login once, board polls on its own ---
+
+static void handleConnectPage() {
+  String s = F(
+      "<!DOCTYPE html><html><head><meta charset=utf-8>"
+      "<meta name=viewport content='width=device-width,initial-scale=1'>"
+      "<title>Headroom - connect account</title><style>"
+      "body{font-family:system-ui;background:#f0eee6;color:#3d3929;padding:22px 16px;margin:0}"
+      ".card{background:#faf9f5;border:1px solid rgba(61,57,41,.12);border-radius:14px;"
+      "padding:16px;max-width:520px;margin:0 auto}h2{margin:.2rem 0 .6rem}"
+      "textarea{width:100%;height:120px;font-family:monospace;font-size:.82rem;"
+      "border-radius:10px;border:1px solid rgba(61,57,41,.25);padding:10px;box-sizing:border-box}"
+      "button{background:#d97757;color:#fff;font-weight:600;font-size:1rem;padding:12px 18px;"
+      "border:none;border-radius:10px;margin-top:10px}"
+      ".warn{background:#fbeee8;border:1px solid rgba(217,119,87,.35);border-radius:10px;"
+      "padding:10px 12px;font-size:.9rem;margin:10px 0}.ok{color:#2e7d32;font-weight:600}"
+      "code{background:rgba(61,57,41,.07);padding:1px 5px;border-radius:5px}"
+      "</style></head><body><div class=card><h2>Connect your Claude account</h2>");
+  if (selfHosted)
+    s += F("<p class=ok>&#10003; Connected - the board polls your usage on its own.</p>");
+  s += F(
+      "<p>Paste the contents of your Claude Code login. The board reads your "
+      "usage directly, so no companion app has to keep running.</p>"
+      "<ul><li><b>macOS:</b> Keychain item <code>Claude Code-credentials</code></li>"
+      "<li><b>Windows/Linux:</b> <code>~/.claude/.credentials.json</code></li></ul>"
+      "<div class=warn><b>Use a separate Claude login for the board.</b> If you "
+      "paste the same login your computer's Claude Code uses, the two keep "
+      "logging each other out. Best is a spare account just for the display.</div>"
+      "<form method=POST action=/connect>"
+      "<textarea name=creds placeholder='{&quot;claudeAiOauth&quot;:{...}}'></textarea>"
+      "<button type=submit>Connect</button></form>");
+  if (selfHosted)
+    s += F("<form method=POST action=/disconnect>"
+           "<button style='background:#8a8577'>Disconnect</button></form>");
+  s += F("</div></body></html>");
+  server->send(200, "text/html", s);
+}
+
+static void handleConnectSave() {
+  String raw = server->arg("creds");
+  JsonDocument doc;
+  if (raw.length() == 0 || deserializeJson(doc, raw)) {
+    server->send(200, "text/html",
+                 "<p>Couldn't read that JSON. <a href=/connect>back</a></p>");
+    return;
+  }
+  JsonObject o = doc["claudeAiOauth"].is<JsonObject>()
+                     ? doc["claudeAiOauth"].as<JsonObject>()
+                     : doc.as<JsonObject>();
+  const char *at = o["accessToken"].as<const char *>();
+  if (!at) at = o["access_token"].as<const char *>();
+  if (!at) {
+    server->send(200, "text/html",
+                 "<p>No access token in that file. <a href=/connect>back</a></p>");
+    return;
+  }
+  accessTok = at;
+  const char *rt = o["refreshToken"].as<const char *>();
+  if (!rt) rt = o["refresh_token"].as<const char *>();
+  refreshTok = rt ? rt : "";
+  tokenExpMs = o["expiresAt"] | (uint64_t)0;
+  if (!tokenExpMs) tokenExpMs = o["expires_at"] | (uint64_t)0;
+  const char *sub = o["subscriptionType"].as<const char *>();
+  strlcpy(plan, sub ? sub : "", sizeof(plan));
+  selfHosted = true;
+  saveCreds();
+
+  bool ok = fetchUsage(true);
+  String s = F("<!DOCTYPE html><html><head><meta charset=utf-8>"
+               "<meta name=viewport content='width=device-width,initial-scale=1'>"
+               "</head><body style='font-family:system-ui;padding:24px'>");
+  if (ok)
+    s += F("<h2>Connected &#10003;</h2><p>The board is showing your live usage. "
+           "You can close this - it runs on its own now.</p>");
+  else
+    s += F("<h2>Saved, but the first read failed</h2><p>Make sure you pasted a "
+           "current, valid login. The board will keep retrying.</p>");
+  s += F("<p><a href=/connect>back</a></p></body></html>");
+  server->send(200, "text/html", s);
+}
+
+static void handleDisconnect() {
+  accessTok = ""; refreshTok = ""; tokenExpMs = 0; selfHosted = false;
+  plan[0] = 0;
+  prefs.begin("headroom", false);
+  prefs.remove("atok"); prefs.remove("rtok");
+  prefs.remove("exp");  prefs.remove("plan");
+  prefs.end();
+  nWindows = 0;
+  server->send(200, "text/html", "<p>Disconnected. <a href=/connect>back</a></p>");
+}
+
 // -------------------------------------------------------------------- setup
 
 static void startPortal() {
@@ -564,11 +794,16 @@ static void startApi() {
   server = new WebServer(API_PORT);
   server->on("/api/status", HTTP_GET, handleStatus);
   server->on("/api/push", HTTP_POST, handlePush);
+  server->on("/connect", HTTP_GET, handleConnectPage);
+  server->on("/connect", HTTP_POST, handleConnectSave);
+  server->on("/disconnect", HTTP_POST, handleDisconnect);
   server->on("/", HTTP_GET, []() {
     server->send(200, "text/html",
-                 "<h1>Headroom Mini</h1><p>POST /api/push feeds this display. "
-                 "Run the Headroom companion with --pi http://" +
-                     WiFi.localIP().toString() + ":8080</p>");
+                 "<h1>Headroom Mini</h1>"
+                 "<p><b><a href=/connect>Connect your Claude account</a></b> to "
+                 "run self-contained (no computer needed).</p>"
+                 "<p>Or feed it from a computer: run the Headroom companion with "
+                 "--pi http://" + WiFi.localIP().toString() + ":8080</p>");
   });
   server->begin();
   MDNS.begin("headroom");
@@ -611,9 +846,11 @@ void setup() {
   // TZ for the header clock; countdowns are TZ-independent. Adjust to taste.
   setenv("TZ", "EST5EDT,M3.2.0,M11.1.0", 1);
   tzset();
+  loadCreds();
   startApi();
   drawMeters();
   improvSendState(improv::S_PROVISIONED);   // in case the browser is listening
+  pollUsage();                              // first live read if self-hosted
 }
 
 // --------------------------------------------------------------------- loop
@@ -630,5 +867,10 @@ void loop() {
     lastTick = millis();
     if (!timeSynced && time(nullptr) > 1600000000) timeSynced = true;
     drawMeters();
+  }
+  static unsigned long lastPoll = 0;   // self-hosted: pull fresh usage
+  if (selfHosted && millis() - lastPoll > POLL_INTERVAL_MS) {
+    lastPoll = millis();
+    pollUsage();
   }
 }

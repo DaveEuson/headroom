@@ -10,10 +10,12 @@ speaks the **same HTTP API as the Pi tracker** — `GET /api/status` with the
 desktop **companion feeds it unchanged**. Claude-night-theme meters, reset
 countdowns, NTP clock.
 
-**Phase 2 (planned):** poll Anthropic's usage endpoint directly on-device
-(token pasted once via the web page, refreshed on-device) — no companion at
-all. Needs its own dedicated Claude login to avoid refresh-token rotation
-clashes with your computer's Claude Code.
+**Self-contained (no companion):** open `http://<board-ip>/connect` and paste
+your Claude Code login once. The board then polls Anthropic's usage endpoint
+directly and refreshes its own token — nothing runs on your computer. Use a
+**separate Claude login for the board** (a spare account), or it and your
+computer's Claude Code will keep rotating each other's refresh token and
+logging each other out.
 
 ## Easiest: the browser flasher (no tools)
 
@@ -81,10 +83,10 @@ top (flip to 0 in `src/main.cpp` if you mount it the other way up).
   - **IMU auto-rotate** → portrait/landscape follows how it sits on the desk
   - **Face-down to dim**, shake to wake
   - **BOOT button held 5s** → factory-reset Wi-Fi
-- **Phase 2 — self-contained.** Poll Anthropic's usage endpoint on-device:
-  paste a dedicated credential once via the device's web page, token
-  refreshed on-device (needs its own Claude login to avoid refresh-token
-  rotation clashes with your computer's Claude Code). No companion at all.
+- **Phase 2 — self-contained (done).** Polls Anthropic's usage endpoint
+  on-device: paste a login once at `/connect`, token refreshed on-device, no
+  companion. TLS currently runs without cert pinning (`setInsecure`) — fine on
+  a trusted home network; pin a CA bundle before shipping if that matters.
 - **Phase 3 — polish.** Battery gauge from the LiPo header, usage history
   stored in flash, alerts (the board has no speaker, but phone push works
   from anywhere).
