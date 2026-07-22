@@ -94,6 +94,9 @@ static bool     selfHosted = false;   // true once a login is stored
 // UI / input state (Phase 1.5)
 static const int BL_CHANNEL = 0;      // LEDC channel for backlight PWM
 static const int BOOT_BTN    = 0;     // BOOT button -> hold to factory reset
+static const int BAT_ADC_PIN = 5;     // VBAT via 200K/100K divider (x3), ADC1_CH4
+static int       batPct      = -1;    // -1 = no battery / hidden
+static bool      batCharging = false;
 static uint8_t   backlight   = 255;   // 0..255
 static bool      showUsed    = false; // false = "% left", true = "% used"
 static bool      screenOff   = false; // face-down / manual dim
@@ -157,6 +160,39 @@ static void drawSplash(const char *line1, const char *line2) {
   drawCentered("HEADROOM", 130, 3, C_ACC);
   if (line1) drawCentered(line1, 170, 1, C_INK);
   if (line2) drawCentered(line2, 190, 1, C_MUTED);
+}
+
+// Read VBAT (GPIO5, 200K/100K divider -> x3) and map to a rough Li-ion %.
+static void readBattery() {
+  uint32_t mv = 0;
+  for (int i = 0; i < 8; i++) mv += analogReadMilliVolts(BAT_ADC_PIN);
+  float v = (mv / 8) * 3.0f / 1000.0f;             // undo the divider
+  if (v < 2.5f) { batPct = -1; batCharging = false; return; }  // no battery
+  int pct;
+  if      (v >= 4.15f) pct = 100;
+  else if (v >= 3.72f) pct = 50 + (int)((v - 3.72f) / (4.15f - 3.72f) * 50);
+  else if (v >= 3.49f) pct = 10 + (int)((v - 3.49f) / (3.72f - 3.49f) * 40);
+  else if (v >= 3.30f) pct =  5 + (int)((v - 3.30f) / (3.49f - 3.30f) *  5);
+  else                 pct = 0;
+  batPct = pct > 100 ? 100 : (pct < 0 ? 0 : pct);
+  batCharging = v >= 4.25f;                          // held above full = on USB
+}
+
+// Small battery glyph at (x,y); nothing drawn when no battery is present.
+static void drawBattery(int x, int y) {
+  if (batPct < 0) return;
+  const int w = 24, h = 12;
+  uint16_t c = batPct <= 10 ? C_CRIT : batPct <= 30 ? C_WARN : C_ACC;
+  gfx->drawRect(x, y, w, h, C_MUTED);
+  gfx->fillRect(x + w, y + 3, 2, h - 6, C_MUTED);    // terminal nub
+  int fw = (w - 4) * batPct / 100;
+  if (fw > 0) gfx->fillRect(x + 2, y + 2, fw, h - 4, c);
+  if (batCharging) {                                 // '+' = charging / on USB
+    gfx->setTextSize(1);
+    gfx->setTextColor(C_ACC);
+    gfx->setCursor(x - 8, y + 3);
+    gfx->print("+");
+  }
 }
 
 static void drawMeters() {
@@ -249,12 +285,14 @@ static void drawMeters() {
     gfx->print(WiFi.localIP().toString());
     gfx->print("  headroom.local");
   }
+  drawBattery(212, 305);
 }
 
 // Focus screen: the most-constrained window, big — glanceable across a room.
 static void drawFocus() {
   gfx->fillScreen(C_BG);
   if (nWindows == 0) { drawMeters(); return; }   // nothing to focus yet
+  drawBattery(206, 8);
 
   int idx = 0;
   for (int i = 1; i < nWindows; i++)
@@ -328,6 +366,7 @@ static void drawHistory() {
   gfx->fillScreen(C_BG);
   drawCentered("History", 34, 3, C_INK);
   drawCentered("session usage over time", 74, 1, C_MUTED);
+  drawBattery(206, 8);
   if (histCount == 0) {
     drawCentered("collecting...", 150, 1, C_MUTED);
     return;
@@ -1138,6 +1177,7 @@ void setup() {
   tzset();
   loadCreds();
   loadHistory();
+  readBattery();
   startApi();
   drawScreen();
   improvSendState(improv::S_PROVISIONED);   // in case the browser is listening
@@ -1159,9 +1199,10 @@ void loop() {
   if (millis() - lastMotion > 400) { lastMotion = millis(); pollMotion(); }
 
   static unsigned long lastTick = 0;
-  if (millis() - lastTick > 30000) {   // refresh clock/countdowns
+  if (millis() - lastTick > 30000) {   // refresh clock/countdowns + battery
     lastTick = millis();
     if (!timeSynced && time(nullptr) > 1600000000) timeSynced = true;
+    readBattery();
     drawScreen();
   }
   static unsigned long lastPoll = 0;   // self-hosted: pull fresh usage
