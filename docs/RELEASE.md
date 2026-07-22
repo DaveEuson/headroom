@@ -46,9 +46,13 @@ Fixed URLs the site depends on (resolve once a Release exists):
        - Open `https://daveeuson.github.io/headroom/`, click **Connect &
          Install**, flash a board.
        - Same window → **Connect to Wi-Fi** (Improv) → board joins.
-       - On the board's screen open `/connect` (self-hosted) and `/alerts`
-         (send-test push).
-       - Download a companion binary from the page and confirm it feeds a board.
+       - Open `http://<board-ip>:8080` → styled landing page loads.
+       - Download a companion binary from the page and confirm it feeds the
+         board (`--pi`, or auto-discovered).
+       - **Pair (self-contained):** `HeadroomCompanion --pair http://<board-ip>:8080`
+         → status flips to "Running self-contained" and meters update with no
+         companion running. (`/connect` manual paste still works as a fallback.)
+       - `/alerts` → set an ntfy topic → **Send test alert** lands on a phone.
 
 ## Release notes template
 
@@ -57,11 +61,13 @@ Fixed URLs the site depends on (resolve once a Release exists):
 
 ### Headroom Mini (ESP32-S3) — first full firmware
 - Browser flasher (ESP Web Tools) + Wi-Fi over USB (Improv) — no VS Code/CLI.
-- Self-contained on-device usage polling (/connect) — no companion needed.
-- Touch (cycle screens, % used/left, brightness) + motion (face-down dim,
+- Self-contained on-device usage polling — pair it once with the companion
+  (`--pair`), no computer needed afterward; manual `/connect` paste as fallback.
+- Touch (cycle screens, % used/left, brightness) + motion (flip to sleep,
   shake wake), battery gauge, usage-history graph, phone push alerts (/alerts).
 
 ### Companion
+- `--pair` hands a board your login so it runs self-contained.
 - Multi-device push (comma-separated --pi), single-instance lock, live-usage
   backoff.
 ```
