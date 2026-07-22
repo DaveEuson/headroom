@@ -97,8 +97,16 @@ static const int BOOT_BTN    = 0;     // BOOT button -> hold to factory reset
 static uint8_t   backlight   = 255;   // 0..255
 static bool      showUsed    = false; // false = "% left", true = "% used"
 static bool      screenOff   = false; // face-down / manual dim
-static int       uiScreen    = 0;     // 0 = all meters, 1 = focus (big)
-static const int UI_SCREENS  = 2;
+static int       uiScreen    = 0;     // 0 = all meters, 1 = focus, 2 = history
+static const int UI_SCREENS  = 3;
+
+// Usage history: a ring buffer of the headline utilization, one sample every
+// SAMPLE_INTERVAL_MS, persisted to flash hourly so it survives reboots.
+static const int HIST_LEN = 60;
+static uint8_t   histBuf[HIST_LEN];
+static int       histCount = 0;       // valid samples so far (<= HIST_LEN)
+static int       histHead  = 0;       // ring write index
+static const unsigned long SAMPLE_INTERVAL_MS = 10UL * 60UL * 1000UL;  // 10 min
 
 static void setBacklight(uint8_t v) {
   backlight = v;
@@ -275,10 +283,81 @@ static void drawFocus() {
   drawCentered(buf, 272, 2, C_MUTED);
 }
 
+// Headline metric to trend: the session window if present, else the fullest.
+static int headlineUtil() {
+  int best = -1;
+  for (int i = 0; i < nWindows; i++) {
+    if (!strcmp(windows[i].key, "five_hour"))
+      return (int)(windows[i].utilization + 0.5f);
+    if ((int)windows[i].utilization > best) best = (int)windows[i].utilization;
+  }
+  return best;   // -1 if no data yet
+}
+
+static void sampleHistory() {
+  int u = headlineUtil();
+  if (u < 0) return;
+  histBuf[histHead] = (uint8_t)(u < 0 ? 0 : (u > 100 ? 100 : u));
+  histHead = (histHead + 1) % HIST_LEN;
+  if (histCount < HIST_LEN) histCount++;
+}
+
+static void saveHistory() {
+  prefs.begin("headroom", false);
+  prefs.putBytes("hist", histBuf, HIST_LEN);
+  prefs.putInt("histc", histCount);
+  prefs.putInt("histh", histHead);
+  prefs.end();
+}
+
+static void loadHistory() {
+  prefs.begin("headroom", true);
+  size_t n = prefs.getBytes("hist", histBuf, HIST_LEN);
+  if (n == HIST_LEN) {
+    histCount = prefs.getInt("histc", 0);
+    histHead  = prefs.getInt("histh", 0);
+  } else {
+    memset(histBuf, 0, HIST_LEN);
+    histCount = histHead = 0;
+  }
+  prefs.end();
+}
+
+// Bar-graph of the session usage over the last ~10 hours.
+static void drawHistory() {
+  gfx->fillScreen(C_BG);
+  drawCentered("History", 34, 3, C_INK);
+  drawCentered("session usage over time", 74, 1, C_MUTED);
+  if (histCount == 0) {
+    drawCentered("collecting...", 150, 1, C_MUTED);
+    return;
+  }
+  const int gx = 16, gy = 104, gw = 208, gh = 150;
+  gfx->drawFastHLine(gx, gy + gh, gw, C_MUTED);          // baseline (0%)
+  gfx->drawFastHLine(gx, gy, gw, C_ACC_T);               // 100% guide
+  float bw = (float)gw / HIST_LEN;
+  int cur = 0, peak = 0;
+  for (int i = 0; i < histCount; i++) {
+    int idx = (histHead - histCount + i + 2 * HIST_LEN) % HIST_LEN;
+    int v = histBuf[idx];
+    if (i == histCount - 1) cur = v;
+    if (v > peak) peak = v;
+    int bh = gh * v / 100;
+    int x = gx + (int)((HIST_LEN - histCount + i) * bw);
+    int left = 100 - v;
+    uint16_t c = left <= 10 ? C_CRIT : left <= 30 ? C_WARN : C_ACC;
+    if (bh > 0) gfx->fillRect(x, gy + gh - bh, (int)bw + 1, bh, c);
+  }
+  char buf[32];
+  snprintf(buf, sizeof(buf), "now %d%%   peak %d%%", cur, peak);
+  drawCentered(buf, gy + gh + 16, 2, C_INK);
+}
+
 // Draw whichever screen is active (data updates / ticks call this).
 static void drawScreen() {
-  if (uiScreen == 1) drawFocus();
-  else               drawMeters();
+  if (uiScreen == 1)      drawFocus();
+  else if (uiScreen == 2) drawHistory();
+  else                    drawMeters();
 }
 
 // ------------------------------------------------------------------ web api
@@ -1058,6 +1137,7 @@ void setup() {
   setenv("TZ", "EST5EDT,M3.2.0,M11.1.0", 1);
   tzset();
   loadCreds();
+  loadHistory();
   startApi();
   drawScreen();
   improvSendState(improv::S_PROVISIONED);   // in case the browser is listening
@@ -1088,5 +1168,13 @@ void loop() {
   if (selfHosted && millis() - lastPoll > POLL_INTERVAL_MS) {
     lastPoll = millis();
     pollUsage();
+  }
+  static unsigned long lastSample = 0; // usage history ring buffer
+  static int samplesSincePersist = 0;
+  if (nWindows > 0 && (lastSample == 0 || millis() - lastSample > SAMPLE_INTERVAL_MS)) {
+    lastSample = millis();
+    sampleHistory();
+    if (++samplesSincePersist >= 6) { samplesSincePersist = 0; saveHistory(); }
+    if (uiScreen == 2) drawScreen();
   }
 }
