@@ -77,7 +77,7 @@ static bool apMode = false;
 static const char *AP_SSID = "Headroom-Setup";
 static const char *AP_PSK  = "headroom";
 static const int   API_PORT = 8080;   // what the companion probes
-static const char *FW_VERSION = "0.1";
+static const char *FW_VERSION = "1.4.0";
 
 // Phase 2 — self-contained: poll Anthropic's usage endpoint directly, using an
 // OAuth login pasted once via /connect. Same contract the companion uses.
@@ -85,7 +85,7 @@ static const char *CLIENT_ID   = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 static const char *REFRESH_URL = "https://platform.claude.com/v1/oauth/token";
 static const char *USAGE_URL   = "https://api.anthropic.com/api/oauth/usage";
 static const char *OAUTH_BETA  = "oauth-2025-04-20";
-static const char *UA          = "Headroom-Mini/0.1";
+static const char *UA          = "Headroom-Mini/1.4.0";
 static const unsigned long POLL_INTERVAL_MS = 5UL * 60UL * 1000UL;
 
 static String   accessTok, refreshTok;
