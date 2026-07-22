@@ -15,7 +15,20 @@ countdowns, NTP clock.
 all. Needs its own dedicated Claude login to avoid refresh-token rotation
 clashes with your computer's Claude Code.
 
-## Day-1 quickstart
+## Easiest: the browser flasher (no tools)
+
+For anyone who just wants it working — no VS Code, no PlatformIO, no git —
+open the setup page in **Chrome or Edge on a computer** and click
+**Connect & Install**:
+
+> **https://daveeuson.github.io/headroom/**
+
+It flashes the latest release straight from the browser, then walks through
+Wi-Fi and the companion download. That page is `docs/index.html` here (served
+by GitHub Pages), and it flashes the `headroom-mini-merged.bin` that a tagged
+release builds. The developer flow below is only needed to change the firmware.
+
+## Developer flow (build from source)
 
 1. Install [VS Code](https://code.visualstudio.com/) + the **PlatformIO IDE**
    extension (or `pip install platformio` for the CLI).

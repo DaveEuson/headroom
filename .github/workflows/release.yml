@@ -49,8 +49,37 @@ jobs:
           name: ${{ matrix.asset }}
           path: companion/dist/${{ matrix.asset }}
 
+  # Single flashable image for the browser flasher (docs/ ESP Web Tools page).
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install platformio esptool
+      - name: Build firmware
+        working-directory: firmware
+        run: pio run
+      - name: Merge bootloader + partitions + app into one image
+        working-directory: firmware
+        run: |
+          BUILD=.pio/build/headroom-mini
+          BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name boot_app0.bin | head -1)
+          esptool.py --chip esp32s3 merge_bin \
+            --flash_mode keep --flash_freq keep --flash_size keep \
+            -o headroom-mini-merged.bin \
+            0x0     "$BUILD/bootloader.bin" \
+            0x8000  "$BUILD/partitions.bin" \
+            0xe000  "$BOOT_APP0" \
+            0x10000 "$BUILD/firmware.bin"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: headroom-mini-merged.bin
+          path: firmware/headroom-mini-merged.bin
+
   release:
-    needs: build
+    needs: [build, firmware]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:

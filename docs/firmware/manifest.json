@@ -1,0 +1,16 @@
+{
+  "name": "Headroom Mini",
+  "version": "latest",
+  "new_install_prompt_erase": false,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "https://github.com/DaveEuson/headroom/releases/latest/download/headroom-mini-merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}
