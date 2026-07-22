@@ -541,18 +541,29 @@ def run_once(cfg):
             _print_no_claude()
             return False, 0
     payload = {"windows": windows, "plan": plan, "source": source}
-    try:
-        result = push(cfg["pi"], cfg["token"], payload)
-    except (urllib.error.URLError, OSError) as exc:
-        print(f"Couldn't reach the Pi at {cfg['pi']}: {exc}", file=sys.stderr)
-        return False, 0
-    if not result.get("ok"):
-        print(f"Pi rejected the push: {result.get('error')}", file=sys.stderr)
+    # cfg["pi"] may be a comma-separated list — one companion can feed
+    # several trackers (e.g. a Pi on the desk and a Mini on the shelf).
+    targets = [t.strip() for t in str(cfg["pi"]).split(",") if t.strip()]
+    delivered = 0
+    for target in targets:
+        try:
+            result = push(target, cfg["token"], payload)
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"Couldn't reach the tracker at {target}: {exc}",
+                  file=sys.stderr)
+            continue
+        if result.get("ok"):
+            delivered += 1
+        else:
+            print(f"{target} rejected the push: {result.get('error')}",
+                  file=sys.stderr)
+    if delivered == 0:
         return False, 0
     tag = "LIVE" if source == "live" else "estimated"
     summary = ", ".join(f"{w['label'].split(' (')[0]} {w['utilization']}%"
                         for w in windows)
-    print(f"pushed [{tag}]: {summary}")
+    where = f" -> {delivered}/{len(targets)} trackers" if len(targets) > 1 else ""
+    print(f"pushed [{tag}]{where}: {summary}")
     return True, 0
 
 
@@ -577,7 +588,8 @@ def main():
     cfg = load_config()
     ap = argparse.ArgumentParser(description="Headroom companion")
     ap.add_argument("--pi", default=cfg["pi"],
-                    help="tracker URL (auto-discovered if omitted)")
+                    help="tracker URL(s), comma-separated for multiple "
+                         "devices (auto-discovered if omitted)")
     ap.add_argument("--token", default=cfg["token"])
     ap.add_argument("--interval", type=int, default=cfg["interval"])
     ap.add_argument("--once", action="store_true", help="push once and exit")
