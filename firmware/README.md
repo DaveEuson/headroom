@@ -10,12 +10,14 @@ speaks the **same HTTP API as the Pi tracker** — `GET /api/status` with the
 desktop **companion feeds it unchanged**. Claude-night-theme meters, reset
 countdowns, NTP clock.
 
-**Self-contained (no companion):** open `http://<board-ip>/connect` and paste
-your Claude Code login once. The board then polls Anthropic's usage endpoint
-directly and refreshes its own token — nothing runs on your computer. Use a
-**separate Claude login for the board** (a spare account), or it and your
-computer's Claude Code will keep rotating each other's refresh token and
-logging each other out.
+**Self-contained (no companion):** run the companion **once** with
+`companion.py --pair http://<board-ip>:8080` — it hands the board your existing
+Claude Code login (no copying by hand), and the board then polls Anthropic's
+usage endpoint directly and refreshes its own token. Nothing runs on your
+computer afterward. (Manual fallback if you can't run the companion: paste the
+login at `http://<board-ip>:8080/connect`.) Use a **separate Claude login for
+the board** (a spare account), or it and your computer's Claude Code will keep
+rotating each other's refresh token and logging each other out.
 
 ## Easiest: the browser flasher (no tools)
 

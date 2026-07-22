@@ -228,9 +228,9 @@ static void drawMeters() {
     if (selfHosted) {
       drawCentered("Fetching your usage...", 150, 1, C_MUTED);
     } else if (lastPushMs == 0) {
-      drawCentered("Connect your account:", 140, 1, C_MUTED);
-      snprintf(buf, sizeof(buf), "http://%s/connect",
-               WiFi.localIP().toString().c_str());
+      drawCentered("Set me up - open", 140, 1, C_MUTED);
+      snprintf(buf, sizeof(buf), "http://%s:%d",
+               WiFi.localIP().toString().c_str(), API_PORT);
       drawCentered(buf, 162, 1, C_ACC);
       drawCentered("(or run the companion on your PC)", 186, 1, C_MUTED);
     } else {
@@ -842,6 +842,28 @@ static void saveCreds() {
   prefs.end();
 }
 
+// Adopt an oauth object (from the companion's --pair or a pasted login) and
+// persist it. Accepts either the raw oauth dict or a {claudeAiOauth:{...}}.
+static bool storeOauth(JsonObject root) {
+  JsonObject o = root["claudeAiOauth"].is<JsonObject>()
+                     ? root["claudeAiOauth"].as<JsonObject>()
+                     : root;
+  const char *at = o["accessToken"].as<const char *>();
+  if (!at) at = o["access_token"].as<const char *>();
+  if (!at) return false;
+  accessTok = at;
+  const char *rt = o["refreshToken"].as<const char *>();
+  if (!rt) rt = o["refresh_token"].as<const char *>();
+  refreshTok = rt ? rt : "";
+  tokenExpMs = o["expiresAt"] | (uint64_t)0;
+  if (!tokenExpMs) tokenExpMs = o["expires_at"] | (uint64_t)0;
+  const char *sub = o["subscriptionType"].as<const char *>();
+  strlcpy(plan, sub ? sub : "", sizeof(plan));
+  selfHosted = true;
+  saveCreds();
+  return true;
+}
+
 // Exchange the rotating refresh token for a fresh access token, saving the new
 // pair back (the refresh token rotates — losing it means re-pasting the login).
 static bool refreshAccess() {
@@ -962,6 +984,9 @@ static void handleConnectPage() {
   if (selfHosted)
     s += F("<p class=ok>&#10003; Connected - the board polls your usage on its own.</p>");
   s += F(
+      "<div class=warn><b>Easier way:</b> run the companion once with "
+      "<code>--pair</code> and it sends this board your login automatically - "
+      "no copying. This manual page is only for when you can't run it.</div>"
       "<p>Paste the contents of your Claude Code login. The board reads your "
       "usage directly, so no companion app has to keep running.</p>"
       "<ul><li><b>macOS:</b> Keychain item <code>Claude Code-credentials</code></li>"
@@ -982,32 +1007,12 @@ static void handleConnectPage() {
 static void handleConnectSave() {
   String raw = server->arg("creds");
   JsonDocument doc;
-  if (raw.length() == 0 || deserializeJson(doc, raw)) {
+  if (raw.length() == 0 || deserializeJson(doc, raw) ||
+      !storeOauth(doc.as<JsonObject>())) {
     server->send(200, "text/html",
-                 "<p>Couldn't read that JSON. <a href=/connect>back</a></p>");
+                 "<p>Couldn't read a login from that. <a href=/connect>back</a></p>");
     return;
   }
-  JsonObject o = doc["claudeAiOauth"].is<JsonObject>()
-                     ? doc["claudeAiOauth"].as<JsonObject>()
-                     : doc.as<JsonObject>();
-  const char *at = o["accessToken"].as<const char *>();
-  if (!at) at = o["access_token"].as<const char *>();
-  if (!at) {
-    server->send(200, "text/html",
-                 "<p>No access token in that file. <a href=/connect>back</a></p>");
-    return;
-  }
-  accessTok = at;
-  const char *rt = o["refreshToken"].as<const char *>();
-  if (!rt) rt = o["refresh_token"].as<const char *>();
-  refreshTok = rt ? rt : "";
-  tokenExpMs = o["expiresAt"] | (uint64_t)0;
-  if (!tokenExpMs) tokenExpMs = o["expires_at"] | (uint64_t)0;
-  const char *sub = o["subscriptionType"].as<const char *>();
-  strlcpy(plan, sub ? sub : "", sizeof(plan));
-  selfHosted = true;
-  saveCreds();
-
   bool ok = fetchUsage(true);
   String s = F("<!DOCTYPE html><html><head><meta charset=utf-8>"
                "<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -1020,6 +1025,19 @@ static void handleConnectSave() {
            "current, valid login. The board will keep retrying.</p>");
   s += F("<p><a href=/connect>back</a></p></body></html>");
   server->send(200, "text/html", s);
+}
+
+// Companion --pair posts the oauth token here so the user never handles it.
+static void handlePair() {
+  if (!server->hasArg("plain")) { sendJson(400, "{\"ok\":false}"); return; }
+  JsonDocument doc;
+  if (deserializeJson(doc, server->arg("plain")) ||
+      !storeOauth(doc.as<JsonObject>())) {
+    sendJson(400, "{\"ok\":false,\"error\":\"no login in body\"}");
+    return;
+  }
+  bool live = fetchUsage(true);
+  sendJson(200, live ? "{\"ok\":true,\"live\":true}" : "{\"ok\":true,\"live\":false}");
 }
 
 static void handleDisconnect() {
@@ -1100,6 +1118,51 @@ static void handleAlertsTest() {
   sendAlert("Headroom", "Test alert - notifications are working.");
   server->send(200, "text/html",
                "<p>Sent - check your phone. <a href=/alerts>back</a></p>");
+}
+
+// Styled landing page: status + how to feed it (companion / pair), links.
+static void handleRoot() {
+  String ip = WiFi.localIP().toString();
+  const char *st = selfHosted ? "Running self-contained"
+                 : lastPushMs ? "Fed by the companion"
+                              : "Not set up yet";
+  String s = F(
+      "<!DOCTYPE html><html><head><meta charset=utf-8>"
+      "<meta name=viewport content='width=device-width,initial-scale=1'>"
+      "<title>Headroom Mini</title><style>"
+      "body{font-family:system-ui;background:#f0eee6;color:#3d3929;padding:22px 16px;margin:0}"
+      ".card{background:#faf9f5;border:1px solid rgba(61,57,41,.12);border-radius:14px;"
+      "padding:18px;max-width:520px;margin:0 auto 14px}h1{margin:.1rem 0}"
+      ".pill{display:inline-block;background:#efe9df;color:#6b6552;border-radius:999px;"
+      "padding:3px 11px;font-size:.82rem}h3{margin:.2rem 0 .5rem}p{margin:.45rem 0}"
+      "code{background:rgba(61,57,41,.07);padding:2px 6px;border-radius:6px;font-size:.9em;word-break:break-all}"
+      "a.btn{display:inline-block;background:#d97757;color:#fff;text-decoration:none;"
+      "font-weight:600;padding:10px 16px;border-radius:10px;margin:4px 8px 0 0}"
+      ".muted{color:#94907e;font-size:.9rem}summary{cursor:pointer}</style></head><body>"
+      "<div class=card><h1>Headroom Mini</h1><span class=pill>");
+  s += st;
+  s += F("</span></div><div class=card><h3>Show your Claude usage</h3>"
+         "<p><b>Easiest &mdash; companion app.</b> Download it from the setup "
+         "page and run it on the computer where you use Claude Code. It feeds "
+         "this board over your network.</p>"
+         "<p><b>Self-contained &mdash; no computer after setup.</b> Run the "
+         "companion once with <code>--pair</code>; it hands this board your "
+         "login and the board updates itself from then on:</p>"
+         "<p><code>HeadroomCompanion --pair http://");
+  s += ip;
+  s += F(":8080</code></p><p class=muted>(from source: <code>python3 "
+         "companion.py --pair http://");
+  s += ip;
+  s += F(":8080</code>)</p></div>"
+         "<div class=card><a class=btn href=/alerts>Set up phone alerts</a>"
+         "<details class=muted style='margin-top:12px'>"
+         "<summary>Advanced: paste a login by hand</summary>"
+         "<p><a href=/connect>Open the manual connect page</a> &mdash; only if "
+         "you can't run the companion.</p></details></div>"
+         "<p class=muted style='text-align:center'>");
+  s += ip;
+  s += F(" &middot; headroom.local</p></body></html>");
+  server->send(200, "text/html", s);
 }
 
 // -------------------------------------------------------------- input helpers
@@ -1297,21 +1360,14 @@ static void startApi() {
   server = new WebServer(API_PORT);
   server->on("/api/status", HTTP_GET, handleStatus);
   server->on("/api/push", HTTP_POST, handlePush);
+  server->on("/api/pair", HTTP_POST, handlePair);
   server->on("/connect", HTTP_GET, handleConnectPage);
   server->on("/connect", HTTP_POST, handleConnectSave);
   server->on("/disconnect", HTTP_POST, handleDisconnect);
   server->on("/alerts", HTTP_GET, handleAlertsPage);
   server->on("/alerts", HTTP_POST, handleAlertsSave);
   server->on("/alerts/test", HTTP_POST, handleAlertsTest);
-  server->on("/", HTTP_GET, []() {
-    server->send(200, "text/html",
-                 "<h1>Headroom Mini</h1>"
-                 "<p><b><a href=/connect>Connect your Claude account</a></b> to "
-                 "run self-contained (no computer needed).</p>"
-                 "<p><a href=/alerts>Phone alerts</a> when usage gets high.</p>"
-                 "<p>Or feed it from a computer: run the Headroom companion with "
-                 "--pi http://" + WiFi.localIP().toString() + ":8080</p>");
-  });
+  server->on("/", HTTP_GET, handleRoot);
   server->begin();
   MDNS.begin("headroom");
   MDNS.addService("http", "tcp", API_PORT);

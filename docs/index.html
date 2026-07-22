@@ -112,6 +112,14 @@
     </div>
     <p class="muted">It finds the board on your network automatically. Within a
       minute or two the meters go live.</p>
+    <div class="note">
+      <strong>Don't want to leave it running?</strong> Make the board
+      self-contained: run the companion once with
+      <code>--pair http://&lt;board-ip&gt;:8080</code>. It hands the board your
+      login, and the board polls your usage on its own from then on — no
+      computer needed. (Best with a spare Claude account, so it doesn't rotate
+      your main login's token.)
+    </div>
     <details>
       <summary>It didn't find the board?</summary>
       <p>Point it straight at the address from step 2 by launching it from a

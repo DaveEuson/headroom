@@ -330,6 +330,41 @@ def push(pi_url, token, payload):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def pair_device(url):
+    """Hand this computer's existing Claude login to a board (Headroom Mini) so
+    it can poll usage on its own — the user never copies a token by hand."""
+    creds, _ = read_creds()
+    if not creds:
+        _print_no_claude()
+        return False
+    oauth = {
+        "accessToken": creds["accessToken"],
+        "refreshToken": creds.get("refreshToken"),
+        "expiresAt": creds.get("expiresAt", 0),
+        "subscriptionType": creds.get("subscriptionType"),
+    }
+    body = json.dumps(oauth).encode("utf-8")
+    req = urllib.request.Request(url.rstrip("/") + "/api/pair", data=body,
+                                 headers={"Content-Type": "application/json"},
+                                 method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"Couldn't reach the board at {url}: {exc}", file=sys.stderr)
+        return False
+    if not result.get("ok"):
+        print(f"Board rejected pairing: {result.get('error')}", file=sys.stderr)
+        return False
+    live = result.get("live")
+    print(f"Paired {url} — the board updates itself now"
+          + ("." if live else " (first read pending; it will retry)."))
+    print("Tip: use a SEPARATE Claude login for the board. If it shares this "
+          "computer's login, the two will rotate each other's token and log "
+          "each other out.")
+    return True
+
+
 def _config_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "companion.config.json")
@@ -593,11 +628,17 @@ def main():
     ap.add_argument("--token", default=cfg["token"])
     ap.add_argument("--interval", type=int, default=cfg["interval"])
     ap.add_argument("--once", action="store_true", help="push once and exit")
+    ap.add_argument("--pair", metavar="URL",
+                    help="send this computer's Claude login to a board so it "
+                         "runs self-contained, then exit")
     ap.add_argument("--no-install", action="store_true",
                     help="don't add to startup")
     ap.add_argument("--uninstall", action="store_true",
                     help="remove from startup and exit")
     args = ap.parse_args()
+
+    if args.pair:
+        sys.exit(0 if pair_device(args.pair) else 1)
 
     if args.uninstall:
         removed = uninstall_autostart()
