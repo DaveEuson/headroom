@@ -32,14 +32,17 @@ Fixed URLs the site depends on (resolve once a Release exists):
        only pre-tag compile check for the firmware).
 3. [ ] **Merge the PR into `main`.** This fires `pages.yml`, which redeploys the
        setup page. (It does *not* build binaries — only the tag does.)
-4. [ ] **Push the tag** from `main`:
+4. [ ] **Create the release / tag.** The tag **must start with `v`** (e.g.
+       `v1.4.0`) — `release.yml` only triggers on `v*`, so a tag like `1.4.0`
+       silently builds nothing. Either push from `main`:
        ```
        git checkout main && git pull
        git tag v1.4.0 && git push origin v1.4.0
        ```
-       `release.yml` builds the three companion apps + the merged firmware image
-       and creates Release `v1.4.0` with them attached. (Tags are pushed by a
-       human — the sandbox can't.)
+       or on GitHub: **Releases → Draft a new release → Choose a tag → type
+       `v1.4.0` → Create new tag on publish → Publish**. Either way `release.yml`
+       builds the three companion apps + the merged firmware image and attaches
+       them to Release `v1.4.0`.
 5. [ ] **Watch `release.yml` go green** and confirm the Release has **4 assets**:
        three `HeadroomCompanion-*` and `headroom-mini-merged.bin`.
 6. [ ] **Smoke test the retail path** in Chrome/Edge:
