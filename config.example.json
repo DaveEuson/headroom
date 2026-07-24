@@ -1,9 +1,0 @@
-{
-  "port": 8080,
-  "usage_poll_seconds": 120,
-  "battery_poll_seconds": 20,
-  "credentials_path": null,
-  "night_start": "22:00",
-  "night_end": "07:00",
-  "hat_display": true
-}
