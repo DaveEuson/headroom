@@ -28,11 +28,22 @@ import glob
 import json
 import os
 import socket
+import ssl
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+
+# TLS trust store. A PyInstaller-frozen binary (esp. on macOS) often can't find
+# the system CA certs -> "CERTIFICATE_VERIFY_FAILED". Prefer certifi's bundle
+# when present (it is in the packaged app); fall back to the system default for
+# a plain "run from source" where certifi may not be installed.
+try:
+    import certifi
+    _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except Exception:  # noqa: BLE001
+    _SSL_CONTEXT = ssl.create_default_context()
 
 APP_MARKER = "Headroom"  # /api/status "app" field, used for discovery
 
@@ -154,7 +165,7 @@ def valid_token(creds, save_fn):
             REFRESH_URL, data=body,
             headers={"Content-Type": "application/json",
                      "User-Agent": USER_AGENT}, method="POST")
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=20, context=_SSL_CONTEXT) as resp:
             result = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, ValueError) as exc:
         print(f"token refresh failed ({exc}); Claude Code can refresh it by "
@@ -181,7 +192,7 @@ def fetch_usage(token):
                  "anthropic-beta": OAUTH_BETA,
                  "Accept": "application/json",
                  "User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    with urllib.request.urlopen(req, timeout=20, context=_SSL_CONTEXT) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -348,7 +359,7 @@ def pair_device(url):
                                  headers={"Content-Type": "application/json"},
                                  method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=20, context=_SSL_CONTEXT) as resp:
             result = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, ValueError) as exc:
         print(f"Couldn't reach the board at {url}: {exc}", file=sys.stderr)
