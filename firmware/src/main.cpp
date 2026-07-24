@@ -179,6 +179,14 @@ static void fmtCountdown(time_t resets, char *out, size_t n) {
   else             snprintf(out, n, "resets in %ldm", mm);
 }
 
+// "2h 10m" / "45m"
+static void fmtDur(long mins, char *out, size_t n) {
+  if (mins < 0) mins = 0;
+  long h = mins / 60, m = mins % 60;
+  if (h > 0) snprintf(out, n, "%ldh %ldm", h, m);
+  else       snprintf(out, n, "%ldm", m);
+}
+
 // ------------------------------------------------------------------ drawing
 
 static void drawCentered(const char *text, int y, uint8_t size, uint16_t color) {
@@ -329,37 +337,81 @@ static void drawMeters() {
   drawBattery(212, 305);
 }
 
-// Focus screen: the most-constrained window, big — glanceable across a room.
+// Focus screen: "will I make it to reset?" — the session window big, plus a
+// burn-rate projection from the board's own usage history.
 static void drawFocus() {
   gfx->fillScreen(C_BG);
   if (nWindows == 0) { drawMeters(); return; }   // nothing to focus yet
   drawBattery(206, 8);
 
-  int idx = 0;
-  for (int i = 1; i < nWindows; i++)
-    if (windows[i].utilization > windows[idx].utilization) idx = i;  // least left
+  // Prefer the session window (that's what running-out-before-reset is about);
+  // otherwise the most-constrained one.
+  int idx = -1;
+  for (int i = 0; i < nWindows; i++)
+    if (!strcmp(windows[i].key, "five_hour")) idx = i;
+  if (idx < 0) {
+    idx = 0;
+    for (int i = 1; i < nWindows; i++)
+      if (windows[i].utilization > windows[idx].utilization) idx = i;
+  }
   Window &w = windows[idx];
   float left = 100.0f - w.utilization;
   if (left < 0) left = 0; if (left > 100) left = 100;
   uint16_t fill = left <= 10 ? C_CRIT : left <= 30 ? C_WARN : C_ACC;
 
-  drawCentered(w.label, 44, 3, C_INK);
-
+  drawCentered(w.label, 40, 3, C_INK);
   char buf[24];
   int val = showUsed ? (int)(w.utilization + 0.5f) : (int)(left + 0.5f);
   snprintf(buf, sizeof(buf), "%d%%", val);
-  drawCentered(buf, 108, 8, fill);
-  drawCentered(showUsed ? "used" : "left", 196, 2, C_MUTED);
+  drawCentered(buf, 96, 8, fill);
+  drawCentered(showUsed ? "used" : "left", 184, 2, C_MUTED);
 
-  // big progress bar
-  int barY = 232;
-  gfx->fillRoundRect(20, barY, 200, 18, 9, C_ACC_T);
+  int barY = 220;
+  gfx->fillRoundRect(20, barY, 200, 16, 8, C_ACC_T);
   int wpx = (int)(200.0f * left / 100.0f);
   if (wpx < 10) wpx = 10;
-  gfx->fillRoundRect(20, barY, wpx, 18, 9, fill);
+  gfx->fillRoundRect(20, barY, wpx, 16, 8, fill);
 
-  fmtCountdown(w.resets_at, buf, sizeof(buf));
-  drawCentered(buf, 272, 2, C_MUTED);
+  // Projection (session window only): burn rate over the last ~hour of history
+  // vs. time to reset.
+  bool projected = false;
+  if (!strcmp(w.key, "five_hour") && timeSynced && histCount > 6) {
+    const int back = 6;                                   // 6 samples x 10 min
+    int oi = (histHead - 1 - back + 2 * HIST_LEN) % HIST_LEN;
+    float rate = (w.utilization - (float)histBuf[oi]) / (back * 10.0f);  // %/min
+    time_t now = time(nullptr);
+    long toReset = w.resets_at ? (long)((w.resets_at - now) / 60) : -1;
+    char e[16], r[16], d[44];
+    if (rate <= 0.03f) {                                  // barely burning
+      drawCentered("holding steady", 256, 2, C_ACC);
+      drawCentered("you'll reset with room to spare", 286, 1, C_MUTED);
+      projected = true;
+    } else {
+      long toEmpty = (long)((100.0f - w.utilization) / rate);
+      fmtDur(toEmpty, e, sizeof(e));
+      if (toReset < 0) {
+        snprintf(d, sizeof(d), "runs out in ~%s", e);
+        drawCentered(d, 262, 2, toEmpty < 60 ? C_CRIT : C_WARN);
+      } else if (toEmpty >= toReset) {
+        fmtDur(toReset, r, sizeof(r));
+        drawCentered("resets before you run out", 256, 2, C_ACC);
+        snprintf(d, sizeof(d), "empty ~%s   resets ~%s", e, r);
+        drawCentered(d, 286, 1, C_MUTED);
+      } else {
+        char gap[16]; fmtDur(toReset - toEmpty, gap, sizeof(gap));
+        snprintf(d, sizeof(d), "runs dry ~%s early", gap);
+        drawCentered(d, 256, 2, (toReset - toEmpty) < 60 ? C_CRIT : C_WARN);
+        fmtDur(toReset, r, sizeof(r));
+        snprintf(d, sizeof(d), "empty ~%s   resets ~%s", e, r);
+        drawCentered(d, 286, 1, C_MUTED);
+      }
+      projected = true;
+    }
+  }
+  if (!projected) {
+    fmtCountdown(w.resets_at, buf, sizeof(buf));
+    drawCentered(buf, 262, 2, C_MUTED);
+  }
 }
 
 // Headline metric to trend: the session window if present, else the fullest.
