@@ -100,8 +100,8 @@ top (flip to 0 in `src/main.cpp` if you mount it the other way up).
 
 ## Notes
 
-- The header clock's timezone is a `TZ` string in `src/main.cpp`
-  (default US Eastern). Countdowns are timezone-independent.
+- Set the header clock's timezone at `http://<board-ip>:8080/settings`
+  (defaults to US Eastern). Countdowns are timezone-independent.
 - Touch, battery gauge, and on-device Anthropic polling are not in v0.
 - If the saved Wi-Fi can't be reached at boot it falls back to the setup
   hotspot without erasing the saved network (a router reboot won't force

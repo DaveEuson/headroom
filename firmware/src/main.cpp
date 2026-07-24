@@ -101,6 +101,7 @@ static bool      batCharging = false;
 static uint8_t   backlight   = 255;   // 0..255
 static bool      showUsed    = false; // false = "% left", true = "% used"
 static bool      screenOff   = false; // face-down / manual dim
+static char      tzEnv[48]   = "EST5EDT,M3.2.0,M11.1.0";  // POSIX TZ, set via /settings
 static int       uiScreen    = 0;     // 0 = all meters, 1 = focus, 2 = history
 static const int UI_SCREENS  = 3;
 
@@ -829,8 +830,14 @@ static void loadCreds() {
   poToken    = prefs.getString("potok", "");
   poUser     = prefs.getString("pouser", "");
   alertPct   = prefs.getInt("alpct", 90);
+  strlcpy(tzEnv, prefs.getString("tz", tzEnv).c_str(), sizeof(tzEnv));
   prefs.end();
   selfHosted = accessTok.length() > 0;
+}
+
+static void applyTz() {
+  setenv("TZ", tzEnv, 1);
+  tzset();
 }
 
 static void saveCreds() {
@@ -1120,6 +1127,70 @@ static void handleAlertsTest() {
                "<p>Sent - check your phone. <a href=/alerts>back</a></p>");
 }
 
+// ---- /settings: friendly timezone picker (clock only; countdowns are TZ-free)
+
+static const char *TZ_OPTIONS[][2] = {
+    {"US Eastern",          "EST5EDT,M3.2.0,M11.1.0"},
+    {"US Central",          "CST6CDT,M3.2.0,M11.1.0"},
+    {"US Mountain",         "MST7MDT,M3.2.0,M11.1.0"},
+    {"US Arizona (no DST)", "MST7"},
+    {"US Pacific",          "PST8PDT,M3.2.0,M11.1.0"},
+    {"US Alaska",           "AKST9AKDT,M3.2.0,M11.1.0"},
+    {"US Hawaii",           "HST10"},
+    {"UK / Ireland",        "GMT0BST,M3.5.0/1,M10.5.0"},
+    {"Central Europe",      "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"India",               "IST-5:30"},
+    {"Japan",               "JST-9"},
+    {"Sydney",              "AEST-10AEDT,M10.1.0,M4.1.0/3"},
+    {"UTC",                 "UTC0"},
+};
+static const int N_TZ = sizeof(TZ_OPTIONS) / sizeof(TZ_OPTIONS[0]);
+
+static void handleSettingsPage() {
+  String s = F(
+      "<!DOCTYPE html><html><head><meta charset=utf-8>"
+      "<meta name=viewport content='width=device-width,initial-scale=1'>"
+      "<title>Headroom - settings</title><style>"
+      "body{font-family:system-ui;background:#f0eee6;color:#3d3929;padding:22px 16px;margin:0}"
+      ".card{background:#faf9f5;border:1px solid rgba(61,57,41,.12);border-radius:14px;"
+      "padding:16px;max-width:520px;margin:0 auto}h2{margin:.2rem 0 .6rem}label{font-size:.9rem}"
+      "select{width:100%;padding:11px;font-size:1rem;border-radius:10px;"
+      "border:1px solid rgba(61,57,41,.25);margin:4px 0 12px;box-sizing:border-box;background:#fff}"
+      "button{background:#d97757;color:#fff;font-weight:600;font-size:1rem;padding:12px 18px;"
+      "border:none;border-radius:10px}.muted{color:#94907e;font-size:.85rem}</style>"
+      "</head><body><div class=card><h2>Settings</h2>"
+      "<form method=POST action=/settings><label>Time zone (for the clock)</label>"
+      "<select name=tz>");
+  for (int i = 0; i < N_TZ; i++) {
+    s += "<option value='";
+    s += TZ_OPTIONS[i][1];
+    s += "'";
+    if (!strcmp(tzEnv, TZ_OPTIONS[i][1])) s += " selected";
+    s += ">";
+    s += TZ_OPTIONS[i][0];
+    s += "</option>";
+  }
+  s += F("</select><button type=submit>Save</button></form>"
+         "<p class=muted>Reset countdowns are timezone-independent.</p></div></body></html>");
+  server->send(200, "text/html", s);
+}
+
+static void handleSettingsSave() {
+  String tz = server->arg("tz");
+  bool known = false;
+  for (int i = 0; i < N_TZ; i++)
+    if (tz == TZ_OPTIONS[i][1]) { known = true; break; }   // only accept a listed value
+  if (known) {
+    strlcpy(tzEnv, tz.c_str(), sizeof(tzEnv));
+    prefs.begin("headroom", false);
+    prefs.putString("tz", tzEnv);
+    prefs.end();
+    applyTz();
+    drawScreen();
+  }
+  server->send(200, "text/html", "<p>Saved. <a href=/settings>back</a></p>");
+}
+
 // Styled landing page: status + how to feed it (companion / pair), links.
 static void handleRoot() {
   String ip = WiFi.localIP().toString();
@@ -1159,6 +1230,7 @@ static void handleRoot() {
          "<code>python companion.py --pair</code>.) Tip: use a spare Claude "
          "account for the board.</p></div>"
          "<div class=card><a class=btn href=/alerts>Set up phone alerts</a>"
+         "<a class=btn href=/settings style='background:#8a8577'>Settings</a>"
          "<details class=muted style='margin-top:12px'>"
          "<summary>Advanced: paste a login by hand</summary>"
          "<p><a href=/connect>Open the manual connect page</a> &mdash; only if "
@@ -1371,6 +1443,8 @@ static void startApi() {
   server->on("/alerts", HTTP_GET, handleAlertsPage);
   server->on("/alerts", HTTP_POST, handleAlertsSave);
   server->on("/alerts/test", HTTP_POST, handleAlertsTest);
+  server->on("/settings", HTTP_GET, handleSettingsPage);
+  server->on("/settings", HTTP_POST, handleSettingsSave);
   server->on("/", HTTP_GET, handleRoot);
   server->begin();
   MDNS.begin("headroom");
@@ -1413,10 +1487,8 @@ void setup() {
   }
 
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  // TZ for the header clock; countdowns are TZ-independent. Adjust to taste.
-  setenv("TZ", "EST5EDT,M3.2.0,M11.1.0", 1);
-  tzset();
   loadCreds();
+  applyTz();          // header-clock timezone (from /settings; countdowns are TZ-free)
   loadHistory();
   readBattery();
   startApi();
