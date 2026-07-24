@@ -115,6 +115,7 @@ def worker(icon):
         color, status, rate_limited = feed_once(state["url"])
         if color == "green":
             companion.save_pi(state["url"])            # remember it for next time
+            ensure_autostart()                         # persist a working setup
         elif color == "red" and "reach" in status and not state["fixed"]:
             state["url"] = None                        # lost it -> rediscover
         # Rate-limited: back off exponentially (cap 30 min) so we stop pounding
@@ -163,12 +164,43 @@ def toggle_feeding(icon, item):
     state["feeding"] = not state["feeding"]
 
 
+def is_autostarted():
+    return os.path.isfile(companion.INSTALLED_MARKER)
+
+
+def ensure_autostart():
+    """Install the login item once, quietly. Called after the first good feed
+    so we only persist a setup that actually works."""
+    if is_autostarted():
+        return
+    try:
+        companion.install_autostart()
+        with open(companion.INSTALLED_MARKER, "w", encoding="utf-8") as fh:
+            fh.write(state.get("url") or "")
+    except Exception:  # noqa: BLE001 - autostart is a nicety, never fatal
+        pass
+
+
+def toggle_autostart(icon, item):
+    try:
+        if is_autostarted():
+            companion.uninstall_autostart()
+        else:
+            companion.install_autostart()
+            with open(companion.INSTALLED_MARKER, "w", encoding="utf-8") as fh:
+                fh.write(state.get("url") or "")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def build_menu():
     return pystray.Menu(
         pystray.MenuItem(lambda *a: state["status"], None, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Feeding", toggle_feeding,
                          checked=lambda item: state["feeding"]),
+        pystray.MenuItem("Start at login", toggle_autostart,
+                         checked=lambda item: is_autostarted()),
         pystray.MenuItem("Pair board (run without this computer)", do_pair),
         pystray.MenuItem("Open board page", do_open,
                          enabled=lambda item: bool(state["url"])),

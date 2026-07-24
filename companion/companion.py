@@ -466,24 +466,35 @@ def save_pi(url):
 INSTALLED_MARKER = os.path.expanduser("~/.claudetracker-companion-installed")
 
 
+def _launch_argv():
+    """How to relaunch *this* companion at login. For a PyInstaller-frozen app
+    that's just the executable itself (its __file__ lives in a temp dir that is
+    gone after exit); from source it's `python thisfile.py`."""
+    if getattr(sys, "frozen", False):
+        return [os.path.abspath(sys.executable)]
+    return [sys.executable or "python3", os.path.abspath(__file__)]
+
+
 def install_autostart():
     """Set the companion to launch at login. Returns a human-readable path."""
-    script = os.path.abspath(__file__)
-    py = sys.executable or "python3"
+    argv = _launch_argv()
     if sys.platform == "win32":
-        pyw = py[:-len("python.exe")] + "pythonw.exe" \
-            if py.lower().endswith("python.exe") else py
+        # Frozen: run the exe directly. From source: prefer pythonw (no console).
+        if not getattr(sys, "frozen", False) and argv[0].lower().endswith("python.exe"):
+            argv[0] = argv[0][:-len("python.exe")] + "pythonw.exe"
+        cmd = " ".join(f'"{a}"' for a in argv)
         startup = os.path.join(os.environ.get("APPDATA", ""), "Microsoft",
                                "Windows", "Start Menu", "Programs", "Startup")
         os.makedirs(startup, exist_ok=True)
         target = os.path.join(startup, "HeadroomCompanion.bat")
         with open(target, "w", encoding="utf-8") as fh:
-            fh.write(f'@echo off\r\nstart "" "{pyw}" "{script}"\r\n')
+            fh.write(f'@echo off\r\nstart "" {cmd}\r\n')
         return target
     if sys.platform == "darwin":
         d = os.path.expanduser("~/Library/LaunchAgents")
         os.makedirs(d, exist_ok=True)
         target = os.path.join(d, "com.claudetracker.companion.plist")
+        args_xml = "".join(f"<string>{a}</string>" for a in argv)
         with open(target, "w", encoding="utf-8") as fh:
             fh.write(f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -491,7 +502,7 @@ def install_autostart():
 <plist version="1.0"><dict>
   <key>Label</key><string>com.claudetracker.companion</string>
   <key>ProgramArguments</key>
-  <array><string>{py}</string><string>{script}</string></array>
+  <array>{args_xml}</array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
 </dict></plist>""")
@@ -503,13 +514,14 @@ def install_autostart():
     d = os.path.expanduser("~/.config/systemd/user")
     os.makedirs(d, exist_ok=True)
     target = os.path.join(d, "claudetracker-companion.service")
+    exec_start = " ".join(argv)
     with open(target, "w", encoding="utf-8") as fh:
         fh.write(f"""[Unit]
 Description=Headroom companion
 After=network-online.target
 
 [Service]
-ExecStart={py} {script}
+ExecStart={exec_start}
 Restart=always
 RestartSec=30
 

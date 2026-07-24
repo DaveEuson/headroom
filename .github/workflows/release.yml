@@ -20,34 +20,52 @@ jobs:
       matrix:
         include:
           - os: windows-latest
+            ext: ".exe"
             asset: HeadroomCompanion-windows.exe
+            cli_asset: HeadroomCompanion-cli-windows.exe
+            gui_deps: ""
+            tray_backend: pystray._win32
           - os: macos-latest
+            ext: ""
             asset: HeadroomCompanion-macos
+            cli_asset: HeadroomCompanion-cli-macos
+            gui_deps: "pyobjc-framework-Cocoa"
+            tray_backend: pystray._darwin
           - os: ubuntu-latest
+            ext: ""
             asset: HeadroomCompanion-linux
+            cli_asset: HeadroomCompanion-cli-linux
+            gui_deps: "python-xlib"
+            tray_backend: pystray._xorg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pyinstaller certifi   # certifi -> bundled CA store (fixes macOS TLS)
-      - name: Build
+      # certifi -> bundled CA store (fixes macOS TLS); pystray/pillow -> the tray UI.
+      - run: pip install pyinstaller certifi pystray pillow ${{ matrix.gui_deps }}
+      - name: Build the tray app (double-click) and the headless CLI
         working-directory: companion
-        run: pyinstaller --onefile --name HeadroomCompanion --noconsole companion.py
-      - name: Rename for the platform
         shell: bash
         run: |
-          cd companion/dist
-          if [ -f HeadroomCompanion.exe ]; then
-            mv HeadroomCompanion.exe "${{ matrix.asset }}"
-          else
-            mv HeadroomCompanion "${{ matrix.asset }}"
-          fi
+          # HeadroomCompanion = the friendly tray app (shows a menubar/tray icon).
+          pyinstaller --onefile --name HeadroomCompanion --noconsole \
+            --hidden-import "${{ matrix.tray_backend }}" \
+            --collect-submodules PIL tray.py
+          # HeadroomCompanion-cli = the headless companion (servers / debugging).
+          pyinstaller --onefile --name HeadroomCompanion-cli companion.py
+          cd dist
+          mv "HeadroomCompanion${{ matrix.ext }}" "${{ matrix.asset }}"
+          mv "HeadroomCompanion-cli${{ matrix.ext }}" "${{ matrix.cli_asset }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
           path: companion/dist/${{ matrix.asset }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.cli_asset }}
+          path: companion/dist/${{ matrix.cli_asset }}
 
   # Flash images for the browser flasher (docs/ ESP Web Tools page).
   firmware:

@@ -40,15 +40,22 @@ usage from Claude Code's local logs (`~/.claude/projects`).
 ### Easiest: the double-click app (no Python)
 
 Scan the QR code on the tracker's screen — or open
-`http://<tracker-address>:8080/setup` — and download the companion for your OS
-from the [latest release]. Double-click it. Done.
+`http://<tracker-address>:8080/setup` — and download **HeadroomCompanion** for
+your OS from the [latest release]. Double-click it. Done.
 
 [latest release]: https://github.com/DaveEuson/HeadroomMini/releases/latest
 
-On first run it **finds the tracker on your network by itself**, sends the first
-reading, and **sets itself to run at every login** — so you do this once and
-never again. (First launch: macOS → right-click → **Open**; Windows → **More
-info → Run anyway**, since the binary isn't code-signed yet.)
+That download **is the tray app** — a green/amber/red icon appears in your
+menubar (macOS) or system tray (Windows/Linux). On first run it **finds the
+tracker on your network by itself**, sends the first reading, and (once a feed
+succeeds) **sets itself to run at every login** — so you do this once and never
+again. (First launch: macOS → right-click → **Open**; Windows → **More info →
+Run anyway**, since the binary isn't code-signed yet.) Right-click / click the
+icon for **Pair**, **Settings**, **Start at login**, and a **Feeding** toggle.
+
+There's also a **HeadroomCompanion-cli** asset — the same thing without a UI,
+for headless servers or debugging (run it from a terminal to watch the
+`pushed [LIVE]: …` output).
 
 These apps are produced automatically by CI on every tagged release
 (see [BUILD.md](BUILD.md) and `.github/workflows/release.yml`).
