@@ -113,7 +113,10 @@ https://www.printables.com/model/1188149-enclosure-for-esp32-s3-touch-lcd-2
 - Update over Wi-Fi at `http://<board-ip>:8080/update` — it downloads the app
   image from the latest GitHub release into the inactive OTA slot and reboots,
   keeping your Wi-Fi/login/settings. A failed download leaves the running
-  firmware untouched; worst case, re-flash over USB.
+  firmware untouched; worst case, re-flash over USB. The board checks for a
+  newer release ~20 s after boot and every 6 h after that; when one is out it
+  shows a small **up-arrow badge** in a screen corner and the landing page's
+  Updates button turns into "Update available."
 - Touch, battery gauge, and on-device Anthropic polling are not in v0.
 - If the saved Wi-Fi can't be reached at boot it falls back to the setup
   hotspot without erasing the saved network (a router reboot won't force

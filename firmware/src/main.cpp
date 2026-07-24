@@ -126,6 +126,8 @@ static int       defaultScreen = 0;   // screen shown at power-on
 static int       rotateSecs  = 0;     // 0 = tap-only; else auto-rotate every N s
 static unsigned long lastUserTouch = 0;  // for pausing auto-rotate after a tap
 static bool screenEnabled(int i) { return screenMask & (1 << i); }
+static bool      updateAvailable = false; // a newer release has been seen online
+static char      latestSeen[16]  = "";    // its tag, for the landing/update page
 
 // Usage history: a ring buffer of the headline utilization, one sample every
 // SAMPLE_INTERVAL_MS, persisted to flash hourly so it survives reboots.
@@ -244,6 +246,15 @@ static void drawBattery(int x, int y) {
   }
 }
 
+// Small "update available" badge: an up-arrow in a filled dot. Only drawn when
+// a newer release has been seen online; harmless no-op otherwise.
+static void drawUpdateBadge(int cx, int cy) {
+  if (!updateAvailable) return;
+  gfx->fillCircle(cx, cy, 8, C_ACC);
+  gfx->fillTriangle(cx, cy - 4, cx - 4, cy + 1, cx + 4, cy + 1, C_BG);  // arrowhead
+  gfx->fillRect(cx - 1, cy, 3, 5, C_BG);                                // shaft
+}
+
 static void drawMeters() {
   gfx->fillScreen(C_BG);
 
@@ -341,6 +352,7 @@ static void drawMeters() {
     gfx->print("  headroom.local");
   }
   drawBattery(212, 305);
+  drawUpdateBadge(222, 20);        // top-right (clock is on the left)
 }
 
 // Focus screen: "will I make it to reset?" — the session window big, plus a
@@ -349,6 +361,7 @@ static void drawFocus() {
   gfx->fillScreen(C_BG);
   if (nWindows == 0) { drawMeters(); return; }   // nothing to focus yet
   drawBattery(206, 8);
+  drawUpdateBadge(16, 16);          // top-left (battery is top-right here)
 
   // Prefer the session window (that's what running-out-before-reset is about);
   // otherwise the most-constrained one.
@@ -466,6 +479,7 @@ static void drawHistory() {
   drawCentered("History", 34, 3, C_INK);
   drawCentered("session usage over time", 74, 1, C_MUTED);
   drawBattery(206, 8);
+  drawUpdateBadge(16, 16);          // top-left (battery is top-right here)
   if (histCount == 0) {
     drawCentered("collecting...", 150, 1, C_MUTED);
     return;
@@ -494,6 +508,7 @@ static void drawHistory() {
 // Sprocket, the mascot. Reacts to remaining headroom (and the time of day).
 static void drawMascot() {
   gfx->fillScreen(C_BG);
+  drawUpdateBadge(222, 20);          // top-right (no battery on this screen)
   static const char *const body[11] = {
       "...K...K...",  "...B...B...",  "..KKKKKKK..",
       ".KBBBBBBBK.",  ".KWWWWWWWK.",  ".KWWWWWWWK.",
@@ -1213,6 +1228,16 @@ static String fetchLatestTag() {
   return tag ? String(tag) : "";
 }
 
+// Periodic background check: is a newer release out than what we're running?
+// Sets the flag that lights the on-screen update badge. Cheap and best-effort.
+static void checkForUpdate() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  String latest = fetchLatestTag();
+  if (!latest.length()) return;
+  strlcpy(latestSeen, latest.c_str(), sizeof(latestSeen));
+  updateAvailable = tagNewer(latest.c_str(), FW_VERSION);
+}
+
 static void drawUpdateProgress(int pct) {
   static int last = -1;
   if (pct == last) return;
@@ -1633,9 +1658,15 @@ static void handleRoot() {
          "<code>python companion.py --pair</code>.) Tip: use a spare Claude "
          "account for the board.</p></div>"
          "<div class=card><a class=btn href=/alerts>Set up phone alerts</a>"
-         "<a class=btn href=/settings style='background:#8a8577'>Settings</a>"
-         "<a class=btn href=/update style='background:#8a8577'>Updates</a>"
-         "<details class=muted style='margin-top:12px'>"
+         "<a class=btn href=/settings style='background:#8a8577'>Settings</a>");
+  if (updateAvailable) {
+    s += "<a class=btn href=/update>Update available";
+    if (latestSeen[0]) { s += " ("; s += latestSeen; s += ")"; }
+    s += " &uarr;</a>";
+  } else {
+    s += "<a class=btn href=/update style='background:#8a8577'>Updates</a>";
+  }
+  s += F("<details class=muted style='margin-top:12px'>"
          "<summary>Advanced: paste a login by hand</summary>"
          "<p><a href=/connect>Open the manual connect page</a> &mdash; only if "
          "you can't run the companion.</p></details></div>"
@@ -1960,5 +1991,15 @@ void loop() {
     sampleHistory();
     if (++samplesSincePersist >= 6) { samplesSincePersist = 0; saveHistory(); }
     if (uiScreen == 2) drawScreen();
+  }
+  // Update check: ~20s after boot, then every 6h. Lights the on-screen badge.
+  static unsigned long lastUpdChk = 0;
+  const unsigned long UPD_CHECK_MS = 6UL * 60 * 60 * 1000;
+  if ((lastUpdChk == 0 ? millis() > 20000 : millis() - lastUpdChk > UPD_CHECK_MS) &&
+      WiFi.status() == WL_CONNECTED) {
+    lastUpdChk = millis();
+    bool was = updateAvailable;
+    checkForUpdate();
+    if (updateAvailable != was) drawScreen();   // badge just appeared/cleared
   }
 }
