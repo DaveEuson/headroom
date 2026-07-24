@@ -68,24 +68,26 @@ def make_icon(color):
 
 
 def feed_once(url):
-    """One poll+push. Returns (color, status text)."""
+    """One poll+push. Returns (color, status text, rate_limited)."""
     try:
         live = companion.get_live_windows()
-    except companion.LiveUnavailable:
-        return "amber", "Usage temporarily unreadable"
+    except companion.LiveUnavailable as exc:
+        if getattr(exc, "rate_limited", False):
+            return "amber", "Rate limited by Anthropic — backing off", True
+        return "amber", "Usage temporarily unreadable", False
     if not live:
-        return "red", "No Claude login on this computer"
+        return "red", "No Claude login on this computer", False
     windows, plan = live
     payload = {"windows": windows, "plan": plan, "source": "live"}
     try:
         res = companion.push(url, "", payload)
     except Exception:  # noqa: BLE001 - any network error means "board unreachable"
-        return "red", "Can't reach the board"
+        return "red", "Can't reach the board", False
     if res.get("ok"):
         summary = ", ".join(f"{w['label'].split(' (')[0]} {w['utilization']:.0f}%"
                             for w in windows[:3])
-        return "green", "Feeding · " + summary
-    return "amber", "Board rejected: " + str(res.get("error"))
+        return "green", "Feeding · " + summary, False
+    return "amber", "Board rejected: " + str(res.get("error")), False
 
 
 def refresh(icon):
@@ -94,6 +96,7 @@ def refresh(icon):
 
 
 def worker(icon):
+    rl_backoff = 0   # extra seconds added while Anthropic is rate-limiting us
     while True:
         if not state["feeding"]:
             state.update(color="grey", status="Paused")
@@ -109,14 +112,21 @@ def worker(icon):
                 refresh(icon)
                 time.sleep(15)
                 continue
-        color, status = feed_once(state["url"])
+        color, status, rate_limited = feed_once(state["url"])
         if color == "green":
             companion.save_pi(state["url"])            # remember it for next time
         elif color == "red" and "reach" in status and not state["fixed"]:
             state["url"] = None                        # lost it -> rediscover
+        # Rate-limited: back off exponentially (cap 30 min) so we stop pounding
+        # the usage endpoint. A good read snaps us back to the normal cadence.
+        if rate_limited:
+            rl_backoff = min(1800, rl_backoff * 2 or INTERVAL)
+            status = f"{status} (next try ~{(INTERVAL + rl_backoff) // 60}m)"
+        else:
+            rl_backoff = 0
         state.update(color=color, status=status)
         refresh(icon)
-        time.sleep(INTERVAL)
+        time.sleep(INTERVAL + rl_backoff)
 
 
 # ---------------------------------------------------------------- menu actions

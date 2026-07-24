@@ -224,9 +224,10 @@ class LiveUnavailable(Exception):
     We must NOT fall back to log estimates in this case — stale real numbers
     on the tracker beat fresh wrong ones."""
 
-    def __init__(self, msg, retry_after=0):
+    def __init__(self, msg, retry_after=0, rate_limited=False):
         super().__init__(msg)
         self.retry_after = retry_after
+        self.rate_limited = rate_limited
 
 
 def get_live_windows():
@@ -257,7 +258,7 @@ def get_live_windows():
             f"usage endpoint returned HTTP {exc.code}"
             + (f", retry after {retry_after}s" if retry_after else "")
             + (f" — {detail}" if detail else ""),
-            retry_after=retry_after)
+            retry_after=retry_after, rate_limited=(exc.code == 429))
     except (urllib.error.URLError, OSError, ValueError) as exc:
         raise LiveUnavailable(f"couldn't read usage: {exc}")
     windows = windows_from_usage(raw)
@@ -589,7 +590,7 @@ def _print_no_claude():
 
 
 def run_once(cfg):
-    """One poll+push cycle. Returns (ok, extra_sleep_seconds)."""
+    """One poll+push cycle. Returns (ok, retry_after_seconds, rate_limited)."""
     try:
         live = get_live_windows()
     except LiveUnavailable as exc:
@@ -598,7 +599,7 @@ def run_once(cfg):
         # the last REAL numbers instead of wrong log-based estimates.
         print(f"live usage unavailable ({exc}); skipping this push so the "
               "tracker keeps its last real reading", file=sys.stderr)
-        return False, min(900, exc.retry_after)
+        return False, min(900, exc.retry_after), exc.rate_limited
     if live:
         windows, plan = live
         source = "live"
@@ -609,7 +610,7 @@ def run_once(cfg):
         plan, source = None, "estimated"
         if not windows:
             _print_no_claude()
-            return False, 0
+            return False, 0, False
     payload = {"windows": windows, "plan": plan, "source": source}
     # cfg["pi"] may be a comma-separated list — one companion can feed
     # several trackers (e.g. a Pi on the desk and a Mini on the shelf).
@@ -628,13 +629,13 @@ def run_once(cfg):
             print(f"{target} rejected the push: {result.get('error')}",
                   file=sys.stderr)
     if delivered == 0:
-        return False, 0
+        return False, 0, False
     tag = "LIVE" if source == "live" else "estimated"
     summary = ", ".join(f"{w['label'].split(' (')[0]} {w['utilization']}%"
                         for w in windows)
     where = f" -> {delivered}/{len(targets)} trackers" if len(targets) > 1 else ""
     print(f"pushed [{tag}]{where}: {summary}")
-    return True, 0
+    return True, 0, False
 
 
 LOCK_PORT = 47823   # localhost mutex so two companions can't double-poll
@@ -703,7 +704,7 @@ def main():
 
     if args.once:
         print(f"Headroom companion -> {cfg['pi']} (single push)")
-        ok, _ = run_once(cfg)
+        ok, _, _ = run_once(cfg)
         sys.exit(0 if ok else 1)
 
     lock = _single_instance()
@@ -715,7 +716,7 @@ def main():
         return
 
     print(f"Headroom companion -> {cfg['pi']} (every {cfg['interval']}s)")
-    first_ok, _ = run_once(cfg)
+    first_ok, _, _ = run_once(cfg)
     if first_ok and not args.no_install and not os.path.isfile(INSTALLED_MARKER):
         try:
             where = install_autostart()
@@ -725,12 +726,25 @@ def main():
                   "  (run with --uninstall to stop)")
         except Exception as exc:  # noqa: BLE001
             print(f"(couldn't set auto-start: {exc})", file=sys.stderr)
+    # When Anthropic rate-limits the usage endpoint (HTTP 429), stop hammering
+    # it: back off exponentially (2x per consecutive 429, capped at 30 min) and
+    # honour any Retry-After the server sends as a floor. A single good read
+    # resets us to the normal cadence.
+    base = max(30, cfg["interval"])
+    rl_backoff = 0
     while True:
-        time.sleep(max(30, cfg["interval"]))
-        _ok, extra = run_once(cfg)
-        if extra:
-            print(f"backing off {extra}s (rate limited)", file=sys.stderr)
-            time.sleep(extra)
+        time.sleep(base + rl_backoff)
+        _ok, retry_after, rate_limited = run_once(cfg)
+        if rate_limited:
+            rl_backoff = min(1800, max(retry_after, rl_backoff * 2 or base))
+            print(f"rate limited by Anthropic — backing off, next try in "
+                  f"~{base + rl_backoff}s (staying quiet so we stop hammering "
+                  "the usage endpoint)", file=sys.stderr)
+        else:
+            if rl_backoff:
+                print("usage endpoint recovered — back to normal cadence",
+                      file=sys.stderr)
+            rl_backoff = 0
 
 
 if __name__ == "__main__":
