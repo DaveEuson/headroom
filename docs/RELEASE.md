@@ -77,6 +77,6 @@ Fixed URLs the site depends on (resolve once a Release exists):
 
 ## Rollback
 
-Releases are immutable; to ship a fix, tag a new patch (`v1.4.1`). The setup
+Releases are immutable; to ship a fix, tag a new patch (`v1.0.1`). The setup
 page and companion links track `releases/latest`, so a new Release moves users
 forward automatically — nothing else to update.
