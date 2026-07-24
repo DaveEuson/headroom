@@ -1,0 +1,39 @@
+name: Build firmware
+
+# Compile-checks the Headroom Mini firmware (ESP32-S3) on every change to
+# firmware/, and attaches the built firmware.bin as an artifact so a release
+# can eventually ship ready-to-flash binaries.
+
+on:
+  push:
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+  pull_request:
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            firmware/.pio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+      - run: pip install platformio
+      - name: Build
+        working-directory: firmware
+        run: pio run
+      - uses: actions/upload-artifact@v4
+        with:
+          name: headroom-mini-firmware
+          path: |
+            firmware/.pio/build/headroom-mini/firmware.bin
+            firmware/.pio/build/headroom-mini/bootloader.bin
+            firmware/.pio/build/headroom-mini/partitions.bin

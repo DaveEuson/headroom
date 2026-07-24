@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Headroom Mini — Setup</title>
+<meta name="description" content="Flash and set up your Headroom Mini in the browser — no VS Code, no command line.">
+<style>
+  :root{
+    --bg:#f0eee6; --card:#faf9f5; --ink:#3d3929; --muted:#7d7a6d;
+    --acc:#d97757; --acc-ink:#fff; --line:rgba(61,57,41,.14);
+  }
+  *{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    background:var(--bg);color:var(--ink);margin:0;line-height:1.5;
+    padding:32px 18px 64px}
+  main{max-width:640px;margin:0 auto}
+  header{text-align:center;margin-bottom:28px}
+  h1{font-size:2rem;margin:.2rem 0}
+  .tag{color:var(--muted);font-size:1.02rem;margin:.2rem 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    padding:22px 20px;margin:16px 0;box-shadow:0 1px 2px rgba(61,57,41,.05)}
+  .step{display:flex;align-items:baseline;gap:10px;margin:0 0 12px}
+  .num{flex:0 0 28px;height:28px;line-height:28px;text-align:center;
+    background:var(--acc);color:var(--acc-ink);border-radius:50%;
+    font-weight:700;font-size:.95rem}
+  h2{font-size:1.2rem;margin:0}
+  p{margin:.5rem 0}
+  .muted{color:var(--muted)}
+  code{background:rgba(61,57,41,.07);padding:2px 6px;border-radius:6px;
+    font-size:.92em}
+  .center{text-align:center}
+  esp-web-install-button{--esp-tools-button-color:var(--acc-ink);
+    --esp-tools-button-background-color:var(--acc)}
+  .btnrow{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0 4px}
+  .dl{flex:1 1 30%;min-width:140px;text-align:center;text-decoration:none;
+    background:#fff;color:var(--ink);border:1px solid var(--line);
+    border-radius:10px;padding:12px 8px;font-weight:600}
+  .dl small{display:block;font-weight:400;color:var(--muted);font-size:.8rem}
+  .note{background:#fbeee8;border:1px solid rgba(217,119,87,.3);
+    border-radius:10px;padding:10px 14px;font-size:.93rem;margin:12px 0}
+  .unsupported{color:#b4442a;font-weight:600}
+  details{margin-top:10px}summary{cursor:pointer;font-weight:600}
+  details p,details li{font-size:.93rem}
+  footer{text-align:center;color:var(--muted);font-size:.9rem;margin-top:32px}
+  a{color:var(--acc)}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Headroom Mini</h1>
+    <p class="tag">Your Claude usage, on your desk. Let's get it running.</p>
+  </header>
+
+  <div class="note center">
+    ⚙️ Setup runs best in <strong>Chrome</strong> or <strong>Edge</strong> on a
+    <strong>computer</strong> (the browser flasher needs USB access). Phones and
+    Safari/Firefox can't flash — but you'll only do this once.
+  </div>
+
+  <div class="card">
+    <div class="step"><span class="num">1</span><h2>Flash the board</h2></div>
+    <p>Plug the board into your computer with a <strong>data USB-C cable</strong>
+      (a charge-only cable won't work), then:</p>
+    <p class="center">
+      <esp-web-install-button manifest="./firmware/manifest.json">
+        <button slot="activate">⚡ Connect &amp; Install</button>
+        <span slot="unsupported" class="unsupported">
+          This browser can't flash — open this page in Chrome or Edge on a computer.
+        </span>
+        <span slot="not-allowed" class="unsupported">
+          Not allowed over http — use the https link.
+        </span>
+      </esp-web-install-button>
+    </p>
+    <p class="muted center">Pick the board's port when asked, then <em>Install</em>.
+      Takes about a minute.</p>
+    <details>
+      <summary>Board not showing up?</summary>
+      <p>Hold the <strong>BOOT</strong> button, tap <strong>RESET</strong>,
+        release BOOT, then click Connect again. If there's still no port, try a
+        different USB-C cable — most are charge-only.</p>
+    </details>
+  </div>
+
+  <div class="card">
+    <div class="step"><span class="num">2</span><h2>Put it on your Wi-Fi</h2></div>
+    <p>Right after it flashes, the same window offers
+      <strong>&ldquo;Connect to Wi-Fi.&rdquo;</strong> Click it, pick your
+      network, type the password once — it's sent to the board over the USB
+      cable you already have plugged in. <strong>No hotspot, no app.</strong></p>
+    <p class="muted">The board reboots and shows its address on screen.</p>
+    <details>
+      <summary>Setting up from a phone instead?</summary>
+      <p>If you're not at a computer: on the board's screen, join the Wi-Fi
+        named <code>Headroom-Setup</code> (password <code>headroom</code>),
+        open <code>http://192.168.4.1</code>, and tap your home network from
+        the list.</p>
+    </details>
+  </div>
+
+  <div class="card">
+    <div class="step"><span class="num">3</span><h2>Feed it your usage</h2></div>
+    <p>Run the little companion on the computer where you use Claude Code. It
+      reads your existing login and sends usage to the board — no extra sign-in.
+      Download it (no install, just double-click):</p>
+    <div class="btnrow">
+      <a class="dl" href="https://github.com/DaveEuson/HeadroomMini/releases/latest/download/HeadroomCompanion-windows.exe">Windows<small>.exe</small></a>
+      <a class="dl" href="https://github.com/DaveEuson/HeadroomMini/releases/latest/download/HeadroomCompanion-macos">macOS<small>Apple / Intel</small></a>
+      <a class="dl" href="https://github.com/DaveEuson/HeadroomMini/releases/latest/download/HeadroomCompanion-linux">Linux<small>x86-64</small></a>
+    </div>
+    <p class="muted">It finds the board on your network automatically. Within a
+      minute or two the meters go live.</p>
+    <div class="note">
+      <strong>Don't want to leave it running?</strong> Make the board
+      self-contained: run the companion once with <code>--pair</code> (it finds
+      the board automatically). It hands the board your login, and the board
+      polls your usage on its own from then on — no computer needed. (Best with
+      a spare Claude account, so it doesn't rotate your main login's token.)
+    </div>
+    <details>
+      <summary>It didn't find the board?</summary>
+      <p>Point it straight at the address from step 2 by launching it from a
+        terminal with <code>--pi http://&lt;board-ip&gt;:8080</code>. Keep the
+        companion running (or set it to start with your computer) so the meters
+        stay fresh.</p>
+    </details>
+  </div>
+
+  <footer>
+    That's it — no VS Code, no command line.<br>
+    <a href="https://github.com/DaveEuson/HeadroomMini">Source &amp; docs on GitHub</a>
+  </footer>
+</main>
+
+<script type="module"
+  src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+config.json
+__pycache__/
+*.pyc
+companion/companion.config.json
+history.json
+.pio/
+firmware/.pio/
