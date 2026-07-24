@@ -91,6 +91,7 @@ static const unsigned long POLL_INTERVAL_MS = 5UL * 60UL * 1000UL;
 static String   accessTok, refreshTok;
 static uint64_t tokenExpMs = 0;       // epoch ms, 0 = unknown
 static bool     selfHosted = false;   // true once a login is stored
+static char     pollStatus[48] = "";  // last on-device poll result (shown when no data)
 
 // UI / input state (Phase 1.5)
 static const int BL_CHANNEL = 0;      // LEDC channel for backlight PWM
@@ -230,7 +231,11 @@ static void drawMeters() {
 
   if (nWindows == 0) {
     if (selfHosted) {
-      drawCentered("Fetching your usage...", 150, 1, C_MUTED);
+      bool err = pollStatus[0] && strcmp(pollStatus, "not paired yet") != 0;
+      drawCentered(pollStatus[0] ? pollStatus : "Fetching your usage...",
+                   150, 1, err ? C_WARN : C_MUTED);
+      if (strstr(pollStatus, "re-pair"))
+        drawCentered("on your computer: companion --pair", 172, 1, C_ACC);
     } else if (lastPushMs == 0) {
       drawCentered("Set me up - open", 140, 1, C_MUTED);
       snprintf(buf, sizeof(buf), "http://%s:%d",
@@ -922,11 +927,17 @@ static const char *shortLabel(const char *key) {
 
 // GET the usage endpoint, parse windows, redraw. Refreshes once on 401/403.
 static bool fetchUsage(bool allowRefresh) {
-  if (accessTok.length() == 0) return false;
+  if (accessTok.length() == 0) {
+    strlcpy(pollStatus, "not paired yet", sizeof(pollStatus));
+    return false;
+  }
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient https;
-  if (!https.begin(client, USAGE_URL)) return false;
+  if (!https.begin(client, USAGE_URL)) {
+    strlcpy(pollStatus, "can't reach Anthropic", sizeof(pollStatus));
+    return false;
+  }
   https.addHeader("Authorization", "Bearer " + accessTok);
   https.addHeader("anthropic-beta", OAUTH_BETA);
   https.addHeader("Accept", "application/json");
@@ -934,16 +945,31 @@ static bool fetchUsage(bool allowRefresh) {
   int code = https.GET();
   if ((code == 401 || code == 403) && allowRefresh) {
     https.end();
-    return refreshAccess() ? fetchUsage(false) : false;
+    if (refreshAccess()) return fetchUsage(false);
+    strlcpy(pollStatus, "login expired - re-pair", sizeof(pollStatus));
+    return false;
   }
-  if (code != 200) { https.end(); return false; }
+  if (code != 200) {
+    https.end();
+    if (code == 401 || code == 403)
+      strlcpy(pollStatus, "login expired - re-pair", sizeof(pollStatus));
+    else if (code == 429)
+      strlcpy(pollStatus, "rate limited - retrying", sizeof(pollStatus));
+    else if (code < 0)
+      strlcpy(pollStatus, "can't reach Anthropic", sizeof(pollStatus));
+    else
+      snprintf(pollStatus, sizeof(pollStatus), "Anthropic error %d", code);
+    return false;
+  }
   String payload = https.getString();
   https.end();
 
   JsonDocument doc;
-  if (deserializeJson(doc, payload)) return false;
+  if (deserializeJson(doc, payload) || doc.as<JsonObject>().isNull()) {
+    strlcpy(pollStatus, "bad response", sizeof(pollStatus));
+    return false;
+  }
   JsonObject root = doc.as<JsonObject>();
-  if (root.isNull()) return false;
 
   // Fixed display order, mirroring the companion's ordering.
   static const char *const ORDER[] = {
@@ -963,7 +989,11 @@ static bool fetchUsage(bool allowRefresh) {
     if (!r) r = v["resetsAt"].as<const char *>();
     w.resets_at = parseISO(r);
   }
-  if (nWindows == 0) return false;
+  if (nWindows == 0) {
+    strlcpy(pollStatus, "no usage windows", sizeof(pollStatus));
+    return false;
+  }
+  pollStatus[0] = 0;   // success -> clear any prior error
   lastPushMs = millis();
   checkAlerts();
   drawScreen();
