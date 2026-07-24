@@ -59,6 +59,14 @@ static const uint16_t C_SPRK_D= RGB565(0x3F, 0x5F, 0x7A);   // shade
 static const uint16_t C_OUT   = RGB565(0x1A, 0x18, 0x16);   // outline / features
 static const uint16_t C_FACE  = RGB565(0xFA, 0xF7, 0xEF);   // face screen
 
+// Sprocket's 11x11 pixel sprite, shared by the device screen and the web UI.
+// K=outline B=body W=face S=shade  '.'=transparent
+static const char *const SPROCKET_SPRITE[11] = {
+    "...K...K...",  "...B...B...",  "..KKKKKKK..",
+    ".KBBBBBBBK.",  ".KWWWWWWWK.",  ".KWWWWWWWK.",
+    ".KWWWWWWWK.",  ".KWWWWWWWK.",  ".KBSBBBSBK.",
+    ".KBBBBBBBK.",  "..KK...KK.."};
+
 // ------------------------------------------------------------------- state
 
 struct Window {
@@ -509,16 +517,11 @@ static void drawHistory() {
 static void drawMascot() {
   gfx->fillScreen(C_BG);
   drawUpdateBadge(222, 20);          // top-right (no battery on this screen)
-  static const char *const body[11] = {
-      "...K...K...",  "...B...B...",  "..KKKKKKK..",
-      ".KBBBBBBBK.",  ".KWWWWWWWK.",  ".KWWWWWWWK.",
-      ".KWWWWWWWK.",  ".KWWWWWWWK.",  ".KBSBBBSBK.",
-      ".KBBBBBBBK.",  "..KK...KK.."};
   const int S = 18, ox = (240 - 11 * S) / 2, oy = 44;
   for (int y = 0; y < 11; y++)
     for (int x = 0; x < 11; x++) {
       uint16_t c;
-      switch (body[y][x]) {
+      switch (SPROCKET_SPRITE[y][x]) {
         case 'K': c = C_OUT;    break;
         case 'W': c = C_FACE;   break;
         case 'B': c = C_SPRK;   break;
@@ -1289,7 +1292,10 @@ static void handleUpdatePage() {
       "button{background:#d97757;color:#fff;font-weight:600;font-size:1rem;padding:12px 18px;"
       "border:none;border-radius:10px}.muted{color:#94907e;font-size:.9rem}"
       "code{background:rgba(61,57,41,.07);padding:1px 6px;border-radius:5px}"
-      "</style></head><body><div class=card><h2>Firmware update</h2>");
+      "</style></head><body><div class=card>"
+      "<p style='margin:0 0 10px'><a href='/' style='color:#94907e;"
+      "text-decoration:none;font-weight:600'>&larr; Home</a></p>"
+      "<h2>Firmware update</h2>");
   s += "<p>Installed: <code>v";
   s += FW_VERSION;
   s += "</code>";
@@ -1432,6 +1438,8 @@ static void handleAlertsPage() {
       "button{background:#d97757;color:#fff;font-weight:600;font-size:1rem;padding:12px 18px;"
       "border:none;border-radius:10px}code{background:rgba(61,57,41,.07);padding:1px 5px;border-radius:5px}"
       ".muted{color:#94907e;font-size:.85rem}</style></head><body><div class=card>"
+      "<p style='margin:0 0 10px'><a href='/' style='color:#94907e;"
+      "text-decoration:none;font-weight:600'>&larr; Home</a></p>"
       "<h2>Phone alerts</h2>"
       "<p>Get a push when a window gets high. Easiest is <b>ntfy</b>: install "
       "the free ntfy app, pick any topic name, and enter it below.</p>"
@@ -1515,7 +1523,9 @@ static void handleSettingsPage() {
       "border:1px solid rgba(61,57,41,.25);margin:4px 0 12px;box-sizing:border-box;background:#fff}"
       "button{background:#d97757;color:#fff;font-weight:600;font-size:1rem;padding:12px 18px;"
       "border:none;border-radius:10px}.muted{color:#94907e;font-size:.85rem}</style>"
-      "</head><body><div class=card><h2>Settings</h2>"
+      "</head><body><div class=card>"
+      "<p style='margin:0 0 10px'><a href='/' style='color:#94907e;"
+      "text-decoration:none;font-weight:600'>&larr; Home</a></p><h2>Settings</h2>"
       "<form method=POST action=/settings><label>Time zone (for the clock)</label>"
       "<select name=tz>");
   for (int i = 0; i < N_TZ; i++) {
@@ -1620,6 +1630,27 @@ static void handleSettingsSave() {
 }
 
 // Styled landing page: status + how to feed it (companion / pair), links.
+// Sprocket as inline SVG for the web UI, from the same sprite the screen draws.
+static String sprocketSvg(int px) {
+  String s = "<svg width="; s += px; s += " height="; s += px;
+  s += " viewBox='0 0 11 11' shape-rendering=crispEdges style='display:block'>";
+  const char *fill;
+  for (int y = 0; y < 11; y++)
+    for (int x = 0; x < 11; x++) {
+      switch (SPROCKET_SPRITE[y][x]) {
+        case 'K': fill = "#1A1816"; break;
+        case 'B': fill = "#5F83A1"; break;
+        case 'W': fill = "#FAF7EF"; break;
+        case 'S': fill = "#3F5F7A"; break;
+        default:  continue;
+      }
+      s += "<rect x="; s += x; s += " y="; s += y;
+      s += " width=1 height=1 fill='"; s += fill; s += "'/>";
+    }
+  s += "</svg>";
+  return s;
+}
+
 static void handleRoot() {
   String ip = WiFi.localIP().toString();
   const char *st = selfHosted ? "Running self-contained"
@@ -1638,10 +1669,14 @@ static void handleRoot() {
       "code{background:rgba(61,57,41,.07);padding:2px 6px;border-radius:6px;font-size:.9em;word-break:break-all}"
       "a.btn{display:inline-block;background:#d97757;color:#fff;text-decoration:none;"
       "font-weight:600;padding:11px 17px;border-radius:10px;margin:6px 8px 0 0}"
-      ".muted{color:#94907e;font-size:.9rem}summary{cursor:pointer}</style></head><body>"
-      "<div class=card><h1>Headroom Mini</h1><span class=pill>");
+      ".muted{color:#94907e;font-size:.9rem}summary{cursor:pointer}"
+      ".ava{background:#262624;border-radius:12px;padding:7px;flex:none}</style></head><body>"
+      "<div class=card style='display:flex;align-items:center;gap:14px'>"
+      "<div class=ava>");
+  s += sprocketSvg(52);
+  s += F("</div><div><h1 style='margin:0 0 5px'>Headroom Mini</h1><span class=pill>");
   s += st;
-  s += F("</span></div><div class=card><h3>See your Claude usage</h3><ol>"
+  s += F("</span></div></div><div class=card><h3>See your Claude usage</h3><ol>"
          "<li><b>Download the companion app</b> and open it.</li>"
          "<li>That's it &mdash; it finds this board on your network and shows "
          "your usage. It also starts with your computer so it stays live.</li>"
@@ -1657,14 +1692,15 @@ static void handleRoot() {
          "<p class=muted>(finds this board automatically. From the source code: "
          "<code>python companion.py --pair</code>.) Tip: use a spare Claude "
          "account for the board.</p></div>"
-         "<div class=card><a class=btn href=/alerts>Set up phone alerts</a>"
-         "<a class=btn href=/settings style='background:#8a8577'>Settings</a>");
+         "<div class=card><h3>Settings &amp; more</h3>"
+         "<a class=btn href=/settings style='background:#8a8577'>Settings</a>"
+         "<a class=btn href=/alerts style='background:#8a8577'>Phone alerts</a>");
   if (updateAvailable) {
     s += "<a class=btn href=/update>Update available";
     if (latestSeen[0]) { s += " ("; s += latestSeen; s += ")"; }
     s += " &uarr;</a>";
   } else {
-    s += "<a class=btn href=/update style='background:#8a8577'>Updates</a>";
+    s += "<a class=btn href=/update style='background:#8a8577'>Check for updates</a>";
   }
   s += F("<details class=muted style='margin-top:12px'>"
          "<summary>Advanced: paste a login by hand</summary>"
