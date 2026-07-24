@@ -102,7 +102,7 @@ static bool apMode = false;
 static const char *AP_SSID = "Headroom-Setup";
 static const char *AP_PSK  = "headroom";
 static const int   API_PORT = 8080;   // what the companion probes
-static const char *FW_VERSION = "1.1.1";
+static const char *FW_VERSION = "1.1.2";
 
 // Phase 2 — self-contained: poll Anthropic's usage endpoint directly, using an
 // OAuth login pasted once via /connect. Same contract the companion uses.
@@ -110,13 +110,14 @@ static const char *CLIENT_ID   = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 static const char *REFRESH_URL = "https://platform.claude.com/v1/oauth/token";
 static const char *USAGE_URL   = "https://api.anthropic.com/api/oauth/usage";
 static const char *OAUTH_BETA  = "oauth-2025-04-20";
-static const char *UA          = "Headroom-Mini/1.1.1";
+static const char *UA          = "Headroom-Mini/1.1.2";
 // OTA self-update (over-the-air from the GitHub release)
 static const char *RELEASES_API =
     "https://api.github.com/repos/DaveEuson/HeadroomMini/releases/latest";
 static const char *APP_BIN_URL =
     "https://github.com/DaveEuson/HeadroomMini/releases/latest/download/headroom-mini-app.bin";
 static const unsigned long POLL_INTERVAL_MS = 5UL * 60UL * 1000UL;
+static unsigned long pollBackoffMs = 0;   // extra wait after a 429, exponential
 
 static String   accessTok, refreshTok;
 static uint64_t tokenExpMs = 0;       // epoch ms, 0 = unknown
@@ -1176,6 +1177,8 @@ static bool fetchUsage(bool allowRefresh) {
   https.addHeader("anthropic-beta", OAUTH_BETA);
   https.addHeader("Accept", "application/json");
   https.addHeader("User-Agent", UA);
+  const char *collect[] = {"Retry-After"};
+  https.collectHeaders(collect, 1);
   int code = https.GET();
   if ((code == 401 || code == 403) && allowRefresh) {
     https.end();
@@ -1184,11 +1187,24 @@ static bool fetchUsage(bool allowRefresh) {
     return false;
   }
   if (code != 200) {
+    if (code == 429) {
+      // Rate limited: back off so we stop pounding the endpoint (and prolonging
+      // the cooldown). Honor Retry-After as a floor, else double each time,
+      // capped at 30 min. A good read resets it (below).
+      long ra = https.header("Retry-After").toInt();   // seconds, 0 if absent
+      https.end();
+      unsigned long raMs = ra > 0 ? (unsigned long)ra * 1000UL : 0;
+      unsigned long grow = pollBackoffMs ? pollBackoffMs * 2 : POLL_INTERVAL_MS;
+      unsigned long bo = raMs > grow ? raMs : grow;
+      if (bo > 1800000UL) bo = 1800000UL;              // 30 min cap
+      pollBackoffMs = bo;
+      unsigned long mins = (POLL_INTERVAL_MS + pollBackoffMs + 59999UL) / 60000UL;
+      snprintf(pollStatus, sizeof(pollStatus), "rate limited - waiting ~%lum", mins);
+      return false;
+    }
     https.end();
     if (code == 401 || code == 403)
       strlcpy(pollStatus, "login expired - re-pair", sizeof(pollStatus));
-    else if (code == 429)
-      strlcpy(pollStatus, "rate limited - retrying", sizeof(pollStatus));
     else if (code < 0)
       strlcpy(pollStatus, "can't reach Anthropic", sizeof(pollStatus));
     else
@@ -1227,7 +1243,8 @@ static bool fetchUsage(bool allowRefresh) {
     strlcpy(pollStatus, "no usage windows", sizeof(pollStatus));
     return false;
   }
-  pollStatus[0] = 0;   // success -> clear any prior error
+  pollStatus[0] = 0;    // success -> clear any prior error
+  pollBackoffMs = 0;    // and drop back to the normal poll cadence
   lastPushMs = millis();
   checkAlerts();
   drawScreen();
@@ -2097,7 +2114,7 @@ void loop() {
     }
   }
   static unsigned long lastPoll = 0;   // self-hosted: pull fresh usage
-  if (selfHosted && millis() - lastPoll > POLL_INTERVAL_MS) {
+  if (selfHosted && millis() - lastPoll > POLL_INTERVAL_MS + pollBackoffMs) {
     lastPoll = millis();
     pollUsage();
   }
