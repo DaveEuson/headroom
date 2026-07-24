@@ -26,6 +26,16 @@
 #include <ctype.h>
 #include <time.h>
 
+// TLS trust: verify server certs against the ESP-IDF root-CA bundle that the
+// arduino-esp32 platform embeds (covers Anthropic, GitHub, ntfy, Pushover).
+// Replaces the old setInsecure() so a MITM can't impersonate those hosts or
+// feed us a forged OTA image. If this symbol ever fails to link on a platform
+// build, that's the signal the bundle isn't embedded.
+extern const uint8_t rootca_crt_bundle_start[] asm("_binary_data_cert_x509_crt_bundle_bin_start");
+static inline void tlsTrust(WiFiClientSecure &c) {
+  c.setCACertBundle(rootca_crt_bundle_start);
+}
+
 // ---------------------------------------------------------------- pins / lcd
 
 #define LCD_SCLK 39
@@ -111,6 +121,9 @@ static const unsigned long POLL_INTERVAL_MS = 5UL * 60UL * 1000UL;
 static String   accessTok, refreshTok;
 static uint64_t tokenExpMs = 0;       // epoch ms, 0 = unknown
 static bool     selfHosted = false;   // true once a login is stored
+static String   pushToken;            // optional shared secret; when set, the
+                                      // companion must send it (X-Push-Token) to
+                                      // push data or pair. Empty = open (default).
 static char     pollStatus[48] = "";  // last on-device poll result (shown when no data)
 
 // UI / input state (Phase 1.5)
@@ -315,7 +328,7 @@ static void drawMeters() {
   }
 
   // meters: label / big % left / bar / countdown
-  int y = 60;
+  int y = 58;
   for (int i = 0; i < nWindows && i < 3; i++) {
     Window &w = windows[i];
     float left = 100.0f - w.utilization;
@@ -348,16 +361,27 @@ static void drawMeters() {
     gfx->setCursor(12, barY + 18);
     gfx->print(buf);
 
-    y += 84;
+    y += 82;
   }
 
-  // footer: only warn when the data's gone stale (the IP lives on the setup
-  // screen and the landing page — no need for an unreadable line here).
-  if (lastPushMs && millis() - lastPushMs > 10UL * 60UL * 1000UL) {
+  // footer: how fresh the data is, plus a hint if more windows exist than fit.
+  if (lastPushMs) {
     gfx->setTextSize(1);
-    gfx->setTextColor(C_WARN);
     gfx->setCursor(10, 306);
-    gfx->print("stale - no update >10m");
+    unsigned long age = (millis() - lastPushMs) / 1000;
+    if (age > 600) {
+      gfx->setTextColor(C_WARN);
+      gfx->print("stale >10m");
+    } else {
+      gfx->setTextColor(C_MUTED);
+      if (age < 90) gfx->print("updated just now");
+      else { snprintf(buf, sizeof(buf), "updated %lum ago", age / 60); gfx->print(buf); }
+    }
+    if (nWindows > 3) {
+      gfx->setTextColor(C_ACC);
+      snprintf(buf, sizeof(buf), "   +%d more", nWindows - 3);
+      gfx->print(buf);
+    }
   }
   drawBattery(212, 305);
   drawUpdateBadge(222, 20);        // top-right (clock is on the left)
@@ -620,7 +644,7 @@ static String urlEncode(const String &s) {
 static void sendNtfy(const char *title, const char *body) {
   if (ntfyTopic.length() == 0) return;
   WiFiClientSecure client;
-  client.setInsecure();
+  tlsTrust(client);
   HTTPClient h;
   if (!h.begin(client, "https://ntfy.sh/" + ntfyTopic)) return;
   h.addHeader("Title", title);
@@ -632,7 +656,7 @@ static void sendNtfy(const char *title, const char *body) {
 static void sendPushover(const char *title, const char *body) {
   if (poToken.length() == 0 || poUser.length() == 0) return;
   WiFiClientSecure client;
-  client.setInsecure();
+  tlsTrust(client);
   HTTPClient h;
   if (!h.begin(client, "https://api.pushover.net/1/messages.json")) return;
   h.addHeader("Content-Type", "application/x-www-form-urlencoded");
@@ -689,6 +713,22 @@ static void sendJson(int code, const String &body) {
   server->send(code, "application/json", body);
 }
 
+// Constant-time compare so a token can't be guessed a character at a time.
+static bool ctEqual(const String &a, const String &b) {
+  if (a.length() != b.length()) return false;
+  uint8_t d = 0;
+  for (size_t i = 0; i < a.length(); i++) d |= (uint8_t)a[i] ^ (uint8_t)b[i];
+  return d == 0;
+}
+
+// Optional shared-secret gate for the machine endpoints (push / pair). Open
+// when no push token is set (zero-config default); once the owner sets one in
+// /settings, the companion must send a matching X-Push-Token header.
+static bool apiAuthed() {
+  if (pushToken.length() == 0) return true;
+  return ctEqual(server->header("X-Push-Token"), pushToken);
+}
+
 static void handleStatus() {
   JsonDocument doc;
   doc["app"] = "Headroom";        // discovery marker the companion looks for
@@ -708,6 +748,10 @@ static void handleStatus() {
 }
 
 static void handlePush() {
+  if (!apiAuthed()) {
+    sendJson(401, "{\"ok\":false,\"error\":\"unauthorized\"}");
+    return;
+  }
   if (server->hasArg("plain") == false) {
     sendJson(400, "{\"ok\":false,\"error\":\"no body\"}");
     return;
@@ -1025,6 +1069,7 @@ static void loadCreds() {
   screenMask = prefs.getUChar("smask", 0x0F);
   defaultScreen = prefs.getInt("dscr", 0);
   rotateSecs = prefs.getInt("rots", 0);
+  pushToken  = prefs.getString("ptok", "");
   prefs.end();
   selfHosted = accessTok.length() > 0;
   if (defaultScreen < 0 || defaultScreen >= UI_SCREENS) defaultScreen = 0;
@@ -1074,7 +1119,7 @@ static bool storeOauth(JsonObject root) {
 static bool refreshAccess() {
   if (refreshTok.length() == 0) return false;
   WiFiClientSecure client;
-  client.setInsecure();   // no on-device CA store; TLS without cert pinning
+  tlsTrust(client);
   HTTPClient https;
   if (!https.begin(client, REFRESH_URL)) return false;
   https.addHeader("Content-Type", "application/json");
@@ -1121,7 +1166,7 @@ static bool fetchUsage(bool allowRefresh) {
     return false;
   }
   WiFiClientSecure client;
-  client.setInsecure();
+  tlsTrust(client);
   HTTPClient https;
   if (!https.begin(client, USAGE_URL)) {
     strlcpy(pollStatus, "can't reach Anthropic", sizeof(pollStatus));
@@ -1213,7 +1258,7 @@ static bool tagNewer(const char *latest, const char *current) {
 // The latest published release's tag (e.g. "v1.1.0"), or "" on failure.
 static String fetchLatestTag() {
   WiFiClientSecure client;
-  client.setInsecure();
+  tlsTrust(client);
   HTTPClient https;
   https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   if (!https.begin(client, RELEASES_API)) return "";
@@ -1221,12 +1266,15 @@ static String fetchLatestTag() {
   https.addHeader("Accept", "application/vnd.github+json");
   int code = https.GET();
   if (code != 200) { https.end(); return ""; }
-  String body = https.getString();
-  https.end();
+  // Parse the tag straight from the response stream with a filter, so the whole
+  // 10-30KB release JSON never lands in one big String (heap/fragmentation).
   JsonDocument filter;
-  filter["tag_name"] = true;                // keep only the tag to save memory
+  filter["tag_name"] = true;
   JsonDocument doc;
-  if (deserializeJson(doc, body, DeserializationOption::Filter(filter))) return "";
+  DeserializationError err =
+      deserializeJson(doc, https.getStream(), DeserializationOption::Filter(filter));
+  https.end();
+  if (err) return "";
   const char *tag = doc["tag_name"].as<const char *>();
   return tag ? String(tag) : "";
 }
@@ -1260,7 +1308,7 @@ static void drawUpdateProgress(int pct) {
 // firmware is never overwritten, so a failed download just leaves us as-is.
 static bool doOTA() {
   WiFiClientSecure client;
-  client.setInsecure();
+  tlsTrust(client);
   HTTPClient https;
   https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   if (!https.begin(client, APP_BIN_URL)) return false;
@@ -1315,6 +1363,17 @@ static void handleUpdatePage() {
 }
 
 static void handleUpdateInstall() {
+  // Re-check that the published release is actually newer before flashing, so a
+  // stale or hand-crafted POST can't trigger a needless re-flash or a downgrade.
+  // (This is a browser-form endpoint, so it can't carry the X-Push-Token header;
+  // the version gate is what protects it.)
+  String latest = fetchLatestTag();
+  if (!latest.length() || !tagNewer(latest.c_str(), FW_VERSION)) {
+    server->send(409, "text/html",
+                 "<h2>Nothing to install</h2><p>Already on the latest version "
+                 "(or GitHub was unreachable). <a href=/update>back</a></p>");
+    return;
+  }
   server->send(200, "text/html",
                "<h2>Updating&hellip;</h2><p>The board is installing and will "
                "reboot in about a minute. Watch its screen.</p>");
@@ -1399,6 +1458,7 @@ static void handleConnectSave() {
 
 // Companion --pair posts the oauth token here so the user never handles it.
 static void handlePair() {
+  if (!apiAuthed()) { sendJson(401, "{\"ok\":false,\"error\":\"unauthorized\"}"); return; }
   if (!server->hasArg("plain")) { sendJson(400, "{\"ok\":false}"); return; }
   JsonDocument doc;
   if (deserializeJson(doc, server->arg("plain")) ||
@@ -1582,6 +1642,14 @@ static void handleSettingsPage() {
     s += "</option>";
   }
   s += F("</select>"
+         "<label>Push token <span class=muted>(optional)</span></label>"
+         "<input type=text name=ptok autocomplete=off placeholder='");
+  s += pushToken.length() ? "set - leave blank to keep" : "off - any device on your Wi-Fi can feed the board";
+  s += F("' style='width:100%;padding:11px;font-size:1rem;border-radius:10px;"
+         "border:1px solid rgba(61,57,41,.25);margin:4px 0 4px;box-sizing:border-box'>"
+         "<p class=muted style='margin:0 0 12px'>Set a secret here and put the same "
+         "value in the companion (<code>--token</code>) to lock feeding/pairing to "
+         "your computer. Type <b>off</b> to clear it.</p>"
          "<button type=submit>Save</button></form>"
          "<p class=muted>Reset countdowns are timezone-independent. The default "
          "screen is always shown even if unchecked above.</p></div></body></html>");
@@ -1622,6 +1690,13 @@ static void handleSettingsSave() {
     prefs.putInt("dscr", defaultScreen);
     prefs.putInt("rots", rotateSecs);
     if (!screenEnabled(uiScreen)) uiScreen = defaultScreen;  // current got turned off
+  }
+  if (server->hasArg("ptok")) {
+    String t = server->arg("ptok");
+    t.trim();
+    if (t == "off") { pushToken = ""; prefs.putString("ptok", ""); }
+    else if (t.length()) { pushToken = t; prefs.putString("ptok", pushToken); }
+    // blank => leave the existing token untouched
   }
   prefs.end();
   applyBacklight();
@@ -1683,15 +1758,18 @@ static void handleRoot() {
          "</ol><p><a class=btn href='https://daveeuson.github.io/HeadroomMini/'>"
          "Get the companion app</a></p>"
          "<p class=muted>No typing, no address to enter.</p></div>"
-         "<div class=card><h3>Run without your computer <span class=muted>"
-         "(optional)</span></h3>"
-         "<p>Want the board to keep updating even when your computer is off? "
-         "Open the companion once in <b>pair</b> mode &mdash; it hands the board "
-         "your login and the board takes over:</p>"
+         "<div class=card><details><summary><b>Advanced:</b> run without your "
+         "computer</summary>"
+         "<p>Normally you just leave the companion running (above) &mdash; that's "
+         "the recommended setup. If you'd rather the board keep updating with your "
+         "computer <i>off</i>, pair it once and it polls Anthropic itself:</p>"
          "<p><code>HeadroomCompanion --pair</code></p>"
-         "<p class=muted>(finds this board automatically. From the source code: "
-         "<code>python companion.py --pair</code>.) Tip: use a spare Claude "
-         "account for the board.</p></div>"
+         "<p class=muted>(finds this board automatically. From source: "
+         "<code>python companion.py --pair</code>.)</p>"
+         "<p class=muted style='color:#c2410c'><b>Use a spare Claude account for "
+         "the board.</b> If you pair the same account you use on your computer, "
+         "the two will keep rotating each other's login and log each other out.</p>"
+         "</details></div>"
          "<div class=card><h3>Settings &amp; more</h3>"
          "<a class=btn href=/settings style='background:#8a8577'>Settings</a>"
          "<a class=btn href=/alerts style='background:#8a8577'>Phone alerts</a>");
@@ -1930,7 +2008,10 @@ static void startApi() {
   server->on("/settings", HTTP_POST, handleSettingsSave);
   server->on("/update", HTTP_GET, handleUpdatePage);
   server->on("/update/install", HTTP_POST, handleUpdateInstall);
+  server->on("/setup", HTTP_GET, handleRoot);      // friendly alias for the docs
   server->on("/", HTTP_GET, handleRoot);
+  const char *watch[] = {"X-Push-Token"};          // capture the auth header
+  server->collectHeaders(watch, 1);
   server->begin();
   MDNS.begin("headroom");
   MDNS.addService("http", "tcp", API_PORT);

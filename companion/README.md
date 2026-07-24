@@ -1,7 +1,12 @@
 # Headroom companion
 
 Runs on the **computer where you use Claude Code** and feeds your usage to the
-Pi.
+board.
+
+> **Requires the Claude Code CLI signed in on this computer** for live numbers —
+> the companion reuses that login (it can't sign in on its own). If you only use
+> Claude in a browser or the desktop app, it falls back to a rough estimate from
+> local logs. See "Why this exists" below.
 
 ## Tray app (menubar / system tray)
 
@@ -39,9 +44,9 @@ usage from Claude Code's local logs (`~/.claude/projects`).
 
 ### Easiest: the double-click app (no Python)
 
-Scan the QR code on the tracker's screen — or open
-`http://<tracker-address>:8080/setup` — and download **HeadroomCompanion** for
-your OS from the [latest release]. Double-click it. Done.
+Open `http://<tracker-address>:8080` (the address is shown on the tracker's
+screen) — or go straight to the [latest release] — and download
+**HeadroomCompanion** for your OS. Double-click it. Done.
 
 [latest release]: https://github.com/DaveEuson/HeadroomMini/releases/latest
 
