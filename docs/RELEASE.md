@@ -14,9 +14,9 @@ GitHub Release; the setup page + companion download links always point at
 | `pages.yml` | push to `main` touching `docs/**` | deploys the setup/flasher page to GitHub Pages |
 
 Fixed URLs the site depends on (resolve once a Release exists):
-- Flasher image: `https://github.com/DaveEuson/headroom/releases/latest/download/headroom-mini-merged.bin`
+- Flasher image: `https://github.com/DaveEuson/HeadroomMini/releases/latest/download/headroom-mini-merged.bin`
 - Companion: `.../releases/latest/download/HeadroomCompanion-{windows.exe,macos,linux}`
-- Setup page: `https://daveeuson.github.io/headroom/`
+- Setup page: `https://daveeuson.github.io/HeadroomMini/`
 
 ## One-time setup (first release only)
 
@@ -43,7 +43,7 @@ Fixed URLs the site depends on (resolve once a Release exists):
 5. [ ] **Watch `release.yml` go green** and confirm the Release has **4 assets**:
        three `HeadroomCompanion-*` and `headroom-mini-merged.bin`.
 6. [ ] **Smoke test the retail path** in Chrome/Edge:
-       - Open `https://daveeuson.github.io/headroom/`, click **Connect &
+       - Open `https://daveeuson.github.io/HeadroomMini/`, click **Connect &
          Install**, flash a board.
        - Same window → **Connect to Wi-Fi** (Improv) → board joins.
        - Open `http://<board-ip>:8080` → styled landing page loads.

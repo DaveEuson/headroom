@@ -1146,7 +1146,7 @@ static void handleRoot() {
          "<li><b>Download the companion app</b> and open it.</li>"
          "<li>That's it &mdash; it finds this board on your network and shows "
          "your usage. It also starts with your computer so it stays live.</li>"
-         "</ol><p><a class=btn href='https://daveeuson.github.io/headroom/'>"
+         "</ol><p><a class=btn href='https://daveeuson.github.io/HeadroomMini/'>"
          "Get the companion app</a></p>"
          "<p class=muted>No typing, no address to enter.</p></div>"
          "<div class=card><h3>Run without your computer <span class=muted>"

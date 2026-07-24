@@ -25,7 +25,7 @@ Scan the QR code on the tracker's screen — or open
 `http://<tracker-address>:8080/setup` — and download the companion for your OS
 from the [latest release]. Double-click it. Done.
 
-[latest release]: https://github.com/DaveEuson/Headroom/releases/latest
+[latest release]: https://github.com/DaveEuson/HeadroomMini/releases/latest
 
 On first run it **finds the tracker on your network by itself**, sends the first
 reading, and **sets itself to run at every login** — so you do this once and

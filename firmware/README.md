@@ -25,7 +25,7 @@ For anyone who just wants it working — no VS Code, no PlatformIO, no git —
 open the setup page in **Chrome or Edge on a computer** and click
 **Connect & Install**:
 
-> **https://daveeuson.github.io/headroom/**
+> **https://daveeuson.github.io/HeadroomMini/**
 
 It flashes the latest release straight from the browser, then walks through
 Wi-Fi and the companion download. That page is `docs/index.html` here (served

@@ -12,7 +12,7 @@ Raspberry Pi, no Linux, no soldering.
 
 No tools, no command line:
 
-1. **Flash it in your browser.** Open **https://daveeuson.github.io/headroom/**
+1. **Flash it in your browser.** Open **https://daveeuson.github.io/HeadroomMini/**
    in Chrome or Edge, plug the board in over USB-C, and click
    **Connect & Install**.
 2. **Set Wi-Fi in the same window** — it hands the board your network over the
