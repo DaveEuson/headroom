@@ -110,6 +110,8 @@ static bool      showUsed    = false; // false = "% left", true = "% used"
 static bool      screenOff   = false; // face-down / manual dim
 static char      tzEnv[48]   = "EST5EDT,M3.2.0,M11.1.0";  // POSIX TZ, set via /settings
 static bool      clock24     = false; // false = 12-hour (3:45 PM), true = 24-hour
+static bool      nightDim    = true;  // ease the backlight down overnight
+static const uint8_t NIGHT_LEVEL = 40;
 static int       uiScreen    = 0;     // 0 = meters, 1 = focus, 2 = history, 3 = Sprocket
 static const int UI_SCREENS  = 4;
 
@@ -121,9 +123,26 @@ static int       histCount = 0;       // valid samples so far (<= HIST_LEN)
 static int       histHead  = 0;       // ring write index
 static const unsigned long SAMPLE_INTERVAL_MS = 10UL * 60UL * 1000UL;  // 10 min
 
+// 10pm-7am local (once NTP has synced). Shared by night-dim and Sprocket.
+static bool nightNow() {
+  time_t now = time(nullptr);
+  if (!timeSynced || now < 100000) return false;
+  struct tm t;
+  localtime_r(&now, &t);
+  return t.tm_hour >= 22 || t.tm_hour < 7;
+}
+
+// Effective backlight = 0 if screen is off, capped to NIGHT_LEVEL overnight,
+// else the user's brightness. Keeps the daytime preference intact.
+static void applyBacklight() {
+  uint8_t eff = backlight;
+  if (nightDim && nightNow() && eff > NIGHT_LEVEL) eff = NIGHT_LEVEL;
+  ledcWrite(BL_CHANNEL, screenOff ? 0 : eff);
+}
+
 static void setBacklight(uint8_t v) {
   backlight = v;
-  ledcWrite(BL_CHANNEL, screenOff ? 0 : v);
+  applyBacklight();
 }
 
 // ------------------------------------------------------------ small helpers
@@ -436,12 +455,7 @@ static void drawMascot() {
     if (idx < 0 || windows[i].utilization > windows[idx].utilization) idx = i;
   int u = idx < 0 ? -1 : (int)(windows[idx].utilization + 0.5f);
   int left = u < 0 ? -1 : 100 - u;
-  bool night = false;
-  time_t now = time(nullptr);
-  if (timeSynced && now > 100000) {
-    struct tm t; localtime_r(&now, &t);
-    night = (t.tm_hour >= 22 || t.tm_hour < 7);
-  }
+  bool night = nightNow();
   int mood = left < 0 ? 4 : night ? 3 : left <= 10 ? 2 : left <= 30 ? 1 : 0;
   uint16_t mc = mood == 2 ? C_CRIT : mood == 1 ? C_WARN
               : mood == 0 ? C_ACC : C_MUTED;
@@ -925,6 +939,7 @@ static void loadCreds() {
   alertPct   = prefs.getInt("alpct", 90);
   strlcpy(tzEnv, prefs.getString("tz", tzEnv).c_str(), sizeof(tzEnv));
   clock24    = prefs.getBool("clk24", false);
+  nightDim   = prefs.getBool("ndim", true);
   prefs.end();
   selfHosted = accessTok.length() > 0;
 }
@@ -1295,6 +1310,12 @@ static void handleSettingsPage() {
   s += F(">12-hour (3:45 PM)</option><option value=24");
   if (clock24) s += " selected";
   s += F(">24-hour (15:45)</option></select>"
+         "<label>Overnight dimming</label><select name=ndim>"
+         "<option value=on");
+  if (nightDim) s += " selected";
+  s += F(">On (dim 10pm-7am)</option><option value=off");
+  if (!nightDim) s += " selected";
+  s += F(">Off</option></select>"
          "<button type=submit>Save</button></form>"
          "<p class=muted>Reset countdowns are timezone-independent.</p></div></body></html>");
   server->send(200, "text/html", s);
@@ -1314,7 +1335,12 @@ static void handleSettingsSave() {
     clock24 = (server->arg("clock") == "24");
     prefs.putBool("clk24", clock24);
   }
+  if (server->hasArg("ndim")) {
+    nightDim = (server->arg("ndim") == "on");
+    prefs.putBool("ndim", nightDim);
+  }
   prefs.end();
+  applyBacklight();
   drawScreen();
   server->send(200, "text/html", "<p>Saved. <a href=/settings>back</a></p>");
 }
@@ -1451,7 +1477,7 @@ static void sensorsBegin() {
   }
 }
 
-static void wake() { screenOff = false; setBacklight(backlight); }
+static void wake() { screenOff = false; applyBacklight(); }
 
 static void cycleScreen(int dir) {
   uiScreen = (uiScreen + dir + UI_SCREENS) % UI_SCREENS;
@@ -1522,7 +1548,7 @@ static void pollMotion() {
   static int downCount = 0;
   float rel = gz * restZ;                     // >0 same as rest, <0 flipped over
   if (rel < -0.4f) {                          // flipped from its resting face
-    if (++downCount > 3 && !screenOff) { screenOff = true; setBacklight(backlight); }
+    if (++downCount > 3 && !screenOff) { screenOff = true; applyBacklight(); }
   } else if (rel > 0.3f) {                    // back to normal
     downCount = 0;
     if (screenOff) wake();
@@ -1643,6 +1669,7 @@ void loop() {
   if (millis() - lastTick > 30000) {   // refresh clock/countdowns + battery
     lastTick = millis();
     if (!timeSynced && time(nullptr) > 1600000000) timeSynced = true;
+    applyBacklight();     // ease down / back up as night comes and goes
     readBattery();
     drawScreen();
   }
