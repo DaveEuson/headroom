@@ -8,8 +8,10 @@ Pi.
 `tray.py` is the friendly version — it lives in your menubar (macOS) or system
 tray (Windows/Linux) instead of a terminal. The icon is green when it's feeding
 the board, amber while it's searching, red when it's stuck; the menu has
-one-click **Pair** (make the board self-contained), **Open board page**, and a
-**Feeding** toggle. It reuses everything below.
+one-click **Pair** (make the board self-contained), **Open board page**, a
+**Feeding** toggle, and a **Settings** submenu that opens the board's own config
+pages (screens & clock, phone alerts, firmware update) in your browser. It
+reuses everything below.
 
 ```
 pip install pystray pillow certifi        # + pyobjc-framework-Cocoa on macOS

@@ -105,8 +105,11 @@ https://www.printables.com/model/1188149-enclosure-for-esp32-s3-touch-lcd-2
 
 ## Notes
 
-- Set the header clock's timezone at `http://<board-ip>:8080/settings`
-  (defaults to US Eastern). Countdowns are timezone-independent.
+- `http://<board-ip>:8080/settings` configures the clock timezone (defaults to
+  US Eastern; countdowns are timezone-independent), 12/24-hour format, overnight
+  dimming, **which screens are in the tap rotation** (meters / focus / history /
+  Sprocket), the **default screen** shown at power-on, and optional
+  **auto-rotate** (cycle the enabled screens every 10-60 s; tapping pauses it).
 - Update over Wi-Fi at `http://<board-ip>:8080/update` — it downloads the app
   image from the latest GitHub release into the inactive OTA slot and reboots,
   keeping your Wi-Fi/login/settings. A failed download leaves the running

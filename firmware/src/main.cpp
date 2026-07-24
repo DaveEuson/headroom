@@ -120,6 +120,12 @@ static bool      nightDim    = true;  // ease the backlight down overnight
 static const uint8_t NIGHT_LEVEL = 40;
 static int       uiScreen    = 0;     // 0 = meters, 1 = focus, 2 = history, 3 = Sprocket
 static const int UI_SCREENS  = 4;
+static const char *SCREEN_NAMES[UI_SCREENS] = {"Meters", "Focus", "History", "Sprocket"};
+static uint8_t   screenMask  = 0x0F;  // bit i set = screen i is in the rotation
+static int       defaultScreen = 0;   // screen shown at power-on
+static int       rotateSecs  = 0;     // 0 = tap-only; else auto-rotate every N s
+static unsigned long lastUserTouch = 0;  // for pausing auto-rotate after a tap
+static bool screenEnabled(int i) { return screenMask & (1 << i); }
 
 // Usage history: a ring buffer of the headline utilization, one sample every
 // SAMPLE_INTERVAL_MS, persisted to flash hourly so it survives reboots.
@@ -998,8 +1004,15 @@ static void loadCreds() {
   strlcpy(tzEnv, prefs.getString("tz", tzEnv).c_str(), sizeof(tzEnv));
   clock24    = prefs.getBool("clk24", false);
   nightDim   = prefs.getBool("ndim", true);
+  screenMask = prefs.getUChar("smask", 0x0F);
+  defaultScreen = prefs.getInt("dscr", 0);
+  rotateSecs = prefs.getInt("rots", 0);
   prefs.end();
   selfHosted = accessTok.length() > 0;
+  if (defaultScreen < 0 || defaultScreen >= UI_SCREENS) defaultScreen = 0;
+  screenMask &= (1 << UI_SCREENS) - 1;      // ignore stray high bits
+  screenMask |= (1 << defaultScreen);       // the default is always in the rotation
+  uiScreen = defaultScreen;                 // boot on the chosen screen
 }
 
 static void applyTz() {
@@ -1501,8 +1514,42 @@ static void handleSettingsPage() {
   s += F(">On (dim 10pm-7am)</option><option value=off");
   if (!nightDim) s += " selected";
   s += F(">Off</option></select>"
+         "<label>Screens to show (tap the display to cycle these)</label>"
+         "<div style='margin:4px 0 12px'>");
+  for (int i = 0; i < UI_SCREENS; i++) {
+    s += "<label style='display:block;font-size:1rem;padding:3px 0'>"
+         "<input type=checkbox name=scr";
+    s += i;
+    s += " value=1";
+    if (screenEnabled(i)) s += " checked";
+    s += "> ";
+    s += SCREEN_NAMES[i];
+    s += "</label>";
+  }
+  s += F("</div><label>Default screen (shown at power-on)</label><select name=dscr>");
+  for (int i = 0; i < UI_SCREENS; i++) {
+    s += "<option value=";
+    s += i;
+    if (i == defaultScreen) s += " selected";
+    s += ">";
+    s += SCREEN_NAMES[i];
+    s += "</option>";
+  }
+  s += F("</select><label>Auto-rotate screens</label><select name=rots>");
+  static const int ROT_OPTS[] = {0, 10, 20, 30, 60};
+  for (int i = 0; i < 5; i++) {
+    s += "<option value=";
+    s += ROT_OPTS[i];
+    if (ROT_OPTS[i] == rotateSecs) s += " selected";
+    s += ">";
+    if (ROT_OPTS[i] == 0) s += "Off (tap only)";
+    else { s += "Every "; s += ROT_OPTS[i]; s += "s"; }
+    s += "</option>";
+  }
+  s += F("</select>"
          "<button type=submit>Save</button></form>"
-         "<p class=muted>Reset countdowns are timezone-independent.</p></div></body></html>");
+         "<p class=muted>Reset countdowns are timezone-independent. The default "
+         "screen is always shown even if unchecked above.</p></div></body></html>");
   server->send(200, "text/html", s);
 }
 
@@ -1523,6 +1570,23 @@ static void handleSettingsSave() {
   if (server->hasArg("ndim")) {
     nightDim = (server->arg("ndim") == "on");
     prefs.putBool("ndim", nightDim);
+  }
+  if (server->hasArg("dscr")) {              // the screen form is present
+    int d = server->arg("dscr").toInt();
+    if (d >= 0 && d < UI_SCREENS) defaultScreen = d;
+    uint8_t m = 0;
+    for (int i = 0; i < UI_SCREENS; i++)
+      if (server->arg(String("scr") + i) == "1") m |= (1 << i);
+    m |= (1 << defaultScreen);              // default always shown (also keeps m != 0)
+    screenMask = m;
+    int r = server->arg("rots").toInt();
+    if (r < 0) r = 0;
+    if (r > 3600) r = 3600;
+    rotateSecs = r;
+    prefs.putUChar("smask", screenMask);
+    prefs.putInt("dscr", defaultScreen);
+    prefs.putInt("rots", rotateSecs);
+    if (!screenEnabled(uiScreen)) uiScreen = defaultScreen;  // current got turned off
   }
   prefs.end();
   applyBacklight();
@@ -1665,8 +1729,19 @@ static void sensorsBegin() {
 
 static void wake() { screenOff = false; applyBacklight(); }
 
+// Next enabled screen in `dir` (+1 / -1), skipping ones the user turned off.
+// Returns `from` unchanged if it's the only one enabled.
+static int nextEnabled(int from, int dir) {
+  int c = from;
+  for (int k = 0; k < UI_SCREENS; k++) {
+    c = (c + dir + UI_SCREENS) % UI_SCREENS;
+    if (screenEnabled(c)) return c;
+  }
+  return from;
+}
+
 static void cycleScreen(int dir) {
-  uiScreen = (uiScreen + dir + UI_SCREENS) % UI_SCREENS;
+  uiScreen = nextEnabled(uiScreen, dir);
   drawScreen();
 }
 
@@ -1680,6 +1755,7 @@ static void bumpBrightness(int d) {
 
 // CST816 gesture codes: 1 up, 2 down, 3 left, 4 right, 5 tap, 0x0B dbl, 0x0C long
 static void dispatchGesture(uint8_t g) {
+  lastUserTouch = millis();                 // pause auto-rotate while you interact
   if (screenOff) { wake(); return; }        // a dimmed screen wakes on any touch
   switch (g) {
     case 0x0C: toggleUsedMode();   break;   // long press -> % left / % used
@@ -1860,6 +1936,17 @@ void loop() {
     applyBacklight();     // ease down / back up as night comes and goes
     readBattery();
     drawScreen();
+  }
+  // Auto-rotate: advance to the next enabled screen every rotateSecs, but only
+  // when more than one screen is enabled and you haven't touched it recently.
+  static unsigned long lastRotate = 0;
+  if (rotateSecs > 0 && !screenOff &&
+      __builtin_popcount(screenMask & ((1 << UI_SCREENS) - 1)) > 1) {
+    unsigned long iv = (unsigned long)rotateSecs * 1000UL;
+    if (millis() - lastRotate >= iv && millis() - lastUserTouch >= iv) {
+      lastRotate = millis();
+      cycleScreen(+1);
+    }
   }
   static unsigned long lastPoll = 0;   // self-hosted: pull fresh usage
   if (selfHosted && millis() - lastPoll > POLL_INTERVAL_MS) {

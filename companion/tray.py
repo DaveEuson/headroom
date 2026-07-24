@@ -149,6 +149,16 @@ def do_open(icon, item):
         webbrowser.open(state["url"])
 
 
+def open_path(path):
+    """A menu callback that opens one of the board's config pages in a browser.
+    Rich forms (screen toggles, timezone, alert thresholds) live on the board so
+    they work even when this computer is off — the tray just deep-links to them."""
+    def _cb(icon, item):
+        if state["url"]:
+            webbrowser.open(state["url"].rstrip("/") + path)
+    return _cb
+
+
 def toggle_feeding(icon, item):
     state["feeding"] = not state["feeding"]
 
@@ -162,6 +172,11 @@ def build_menu():
         pystray.MenuItem("Pair board (run without this computer)", do_pair),
         pystray.MenuItem("Open board page", do_open,
                          enabled=lambda item: bool(state["url"])),
+        pystray.MenuItem("Settings", pystray.Menu(
+            pystray.MenuItem("Screens, clock & auto-rotate…", open_path("/settings")),
+            pystray.MenuItem("Phone alerts…", open_path("/alerts")),
+            pystray.MenuItem("Update firmware…", open_path("/update")),
+        ), enabled=lambda item: bool(state["url"])),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit", lambda icon, item: icon.stop()),
     )
