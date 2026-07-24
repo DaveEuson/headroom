@@ -49,7 +49,7 @@ jobs:
           name: ${{ matrix.asset }}
           path: companion/dist/${{ matrix.asset }}
 
-  # Single flashable image for the browser flasher (docs/ ESP Web Tools page).
+  # Flash images for the browser flasher (docs/ ESP Web Tools page).
   firmware:
     runs-on: ubuntu-latest
     steps:
@@ -61,22 +61,31 @@ jobs:
       - name: Build firmware
         working-directory: firmware
         run: pio run
-      - name: Merge bootloader + partitions + app into one image
+      - name: Assemble flash images
         working-directory: firmware
         run: |
           BUILD=.pio/build/headroom-mini
           BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name boot_app0.bin | head -1)
+          mkdir -p out
+          # Individual parts. The flasher writes these at their offsets and
+          # skips the NVS region (0x9000), so saved Wi-Fi / pairing / settings
+          # survive an update.
+          cp "$BUILD/bootloader.bin" out/headroom-mini-bootloader.bin
+          cp "$BUILD/partitions.bin" out/headroom-mini-partitions.bin
+          cp "$BOOT_APP0"            out/headroom-mini-boot_app0.bin
+          cp "$BUILD/firmware.bin"   out/headroom-mini-app.bin
+          # Single full-flash image for esptool / manual users.
           esptool.py --chip esp32s3 merge_bin \
             --flash_mode keep --flash_freq keep --flash_size keep \
-            -o headroom-mini-merged.bin \
+            -o out/headroom-mini-merged.bin \
             0x0     "$BUILD/bootloader.bin" \
             0x8000  "$BUILD/partitions.bin" \
             0xe000  "$BOOT_APP0" \
             0x10000 "$BUILD/firmware.bin"
       - uses: actions/upload-artifact@v4
         with:
-          name: headroom-mini-merged.bin
-          path: firmware/headroom-mini-merged.bin
+          name: firmware-images
+          path: firmware/out/*
 
   release:
     needs: [build, firmware]

@@ -43,8 +43,10 @@ Fixed URLs the site depends on (resolve once a Release exists):
        `v1.0.0` → Create new tag on publish → Publish**. Either way `release.yml`
        builds the three companion apps + the merged firmware image and attaches
        them to Release `v1.0.0`.
-5. [ ] **Watch `release.yml` go green** and confirm the Release has **4 assets**:
-       three `HeadroomCompanion-*` and `headroom-mini-merged.bin`.
+5. [ ] **Watch `release.yml` go green** and confirm the Release has the three
+       `HeadroomCompanion-*` apps plus the firmware images
+       (`headroom-mini-bootloader/partitions/boot_app0/app.bin` for the flasher,
+       and `headroom-mini-merged.bin` for esptool users).
 6. [ ] **Smoke test the retail path** in Chrome/Edge:
        - Open `https://daveeuson.github.io/HeadroomMini/`, click **Connect &
          Install**, flash a board.

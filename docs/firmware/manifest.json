@@ -6,10 +6,10 @@
     {
       "chipFamily": "ESP32-S3",
       "parts": [
-        {
-          "path": "headroom-mini-merged.bin",
-          "offset": 0
-        }
+        { "path": "headroom-mini-bootloader.bin", "offset": 0 },
+        { "path": "headroom-mini-partitions.bin", "offset": 32768 },
+        { "path": "headroom-mini-boot_app0.bin", "offset": 57344 },
+        { "path": "headroom-mini-app.bin", "offset": 65536 }
       ]
     }
   ]

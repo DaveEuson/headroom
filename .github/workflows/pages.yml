@@ -33,14 +33,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Bundle latest firmware for the flasher (same-origin, no CORS)
+      - name: Bundle latest firmware images for the flasher (same-origin, no CORS)
         run: |
-          url="https://github.com/${{ github.repository }}/releases/latest/download/headroom-mini-merged.bin"
-          if curl -fsSL -o docs/firmware/headroom-mini-merged.bin "$url"; then
-            echo "bundled $(du -h docs/firmware/headroom-mini-merged.bin | cut -f1) firmware image"
-          else
-            echo "::warning::no latest-release firmware yet; flasher Install will 404 until a release exists"
-          fi
+          base="https://github.com/${{ github.repository }}/releases/latest/download"
+          for f in headroom-mini-bootloader.bin headroom-mini-partitions.bin \
+                   headroom-mini-boot_app0.bin headroom-mini-app.bin; do
+            curl -fsSL -o "docs/firmware/$f" "$base/$f" \
+              || echo "::warning::missing $f in latest release (flasher Install 404s until a release with split images exists)"
+          done
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
