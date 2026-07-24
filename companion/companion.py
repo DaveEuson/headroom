@@ -393,20 +393,44 @@ def _probe(url):
         return False
 
 
+def _local_prefixes():
+    """Every /24 this computer sits on. Covers machines with more than one
+    adapter (Wi-Fi + Ethernet, VPNs, Hyper-V/WSL) where the board may be on a
+    different interface than the default route."""
+    prefixes = []
+
+    def add(ip):
+        if (ip and ip.count(".") == 3 and not ip.startswith("127.")
+                and not ip.startswith("169.254.")):
+            p = ip.rsplit(".", 1)[0]
+            if p not in prefixes:
+                prefixes.append(p)
+
+    try:  # the interface used to reach the internet (first, most likely)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        add(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:  # every other IPv4 the host knows about
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            add(info[4][0])
+    except OSError:
+        pass
+    return prefixes
+
+
 def discover_pi(port=8080):
     """Find the tracker on the LAN with no address typing. Returns URL or None."""
-    for host in ("claudetracker.local", "claudecounter.local"):
+    for host in ("headroom.local", "claudetracker.local", "claudecounter.local"):
         url = f"http://{host}:{port}"
         if _probe(url):
             return url
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.connect(("8.8.8.8", 80))
-        prefix = sock.getsockname()[0].rsplit(".", 1)[0]
-        sock.close()
-    except OSError:
+    prefixes = _local_prefixes()
+    if not prefixes:
         return None
-    urls = [f"http://{prefix}.{i}:{port}" for i in range(1, 255)]
+    urls = [f"http://{p}.{i}:{port}" for p in prefixes for i in range(1, 255)]
     print("Looking for your tracker on the network...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=64) as ex:
         futures = {ex.submit(_probe, u): u for u in urls}

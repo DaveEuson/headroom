@@ -37,7 +37,20 @@ except ImportError:
 INTERVAL = 120  # seconds between feeds
 
 # Shared state. Python's GIL makes these simple dict updates safe enough here.
-state = {"color": "amber", "status": "Starting…", "url": None, "feeding": True}
+# url may be pinned up front via the HEADROOM_PI env var or a saved config, so
+# a fussy network (VPNs, work laptops) doesn't have to be auto-discovered.
+state = {"color": "amber", "status": "Starting…", "url": None,
+         "feeding": True, "fixed": False}
+
+
+def initial_url():
+    u = os.environ.get("HEADROOM_PI", "").strip()
+    if not u:
+        try:
+            u = (companion.load_config().get("pi") or "").split(",")[0].strip()
+        except Exception:  # noqa: BLE001
+            u = ""
+    return u.rstrip("/") or None
 
 COLORS = {"green": (94, 170, 100), "amber": (230, 164, 23),
           "red": (221, 77, 77), "grey": (140, 140, 140)}
@@ -97,8 +110,10 @@ def worker(icon):
                 time.sleep(15)
                 continue
         color, status = feed_once(state["url"])
-        if color == "red" and "reach" in status:      # lost it -> rediscover
-            state["url"] = None
+        if color == "green":
+            companion.save_pi(state["url"])            # remember it for next time
+        elif color == "red" and "reach" in status and not state["fixed"]:
+            state["url"] = None                        # lost it -> rediscover
         state.update(color=color, status=status)
         refresh(icon)
         time.sleep(INTERVAL)
@@ -143,6 +158,10 @@ def build_menu():
 
 
 def main():
+    pinned = initial_url()
+    if pinned:
+        state["url"] = pinned
+        state["fixed"] = True
     icon = pystray.Icon("Headroom", make_icon("amber"), "Headroom", build_menu())
     threading.Thread(target=worker, args=(icon,), daemon=True).start()
     icon.run()   # blocks on the main thread (required on macOS)
