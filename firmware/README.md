@@ -75,6 +75,11 @@ Within a couple of minutes the meters go live.
 Panel: ST7789, 240×320, IPS, rotation 2 = portrait with the USB-C connector on
 top (flip to 0 in `src/main.cpp` if you mount it the other way up).
 
+## Enclosure
+
+A printable case that fits this board well:
+https://www.printables.com/model/1188149-enclosure-for-esp32-s3-touch-lcd-2
+
 ## Roadmap
 
 - **v0 (this)** — screen + Wi-Fi + companion-fed meters. Bring-up day.
