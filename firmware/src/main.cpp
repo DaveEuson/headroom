@@ -288,18 +288,21 @@ static void drawMeters() {
   if (nWindows == 0) {
     if (selfHosted) {
       bool err = pollStatus[0] && strcmp(pollStatus, "not paired yet") != 0;
-      drawCentered(pollStatus[0] ? pollStatus : "Fetching your usage...",
-                   150, 1, err ? C_WARN : C_MUTED);
+      if (err)
+        drawCentered(pollStatus, 150, 1, C_WARN);   // errors can be long: keep compact
+      else
+        drawCentered("Fetching usage...", 148, 2, C_MUTED);
       if (strstr(pollStatus, "re-pair"))
-        drawCentered("on your computer: companion --pair", 172, 1, C_ACC);
+        drawCentered("on your computer: companion --pair", 176, 1, C_ACC);
     } else if (lastPushMs == 0) {
-      drawCentered("Set me up - open", 140, 1, C_MUTED);
-      snprintf(buf, sizeof(buf), "http://%s:%d",
+      drawCentered("Set me up", 116, 3, C_INK);
+      drawCentered("open in a browser:", 154, 1, C_MUTED);
+      snprintf(buf, sizeof(buf), "%s:%d",
                WiFi.localIP().toString().c_str(), API_PORT);
-      drawCentered(buf, 162, 1, C_ACC);
-      drawCentered("(or run the companion on your PC)", 186, 1, C_MUTED);
+      drawCentered(buf, 176, 2, C_ACC);            // big, legible IP:port
+      drawCentered("or run the companion on your PC", 210, 1, C_MUTED);
     } else {
-      drawCentered("No usage windows", 150, 1, C_MUTED);
+      drawCentered("No usage windows", 148, 2, C_MUTED);
     }
   }
 
@@ -332,24 +335,21 @@ static void drawMeters() {
     gfx->fillRoundRect(12, barY, wpx, 14, 7, fill);
 
     fmtCountdown(w.resets_at, buf, sizeof(buf));
-    gfx->setTextSize(1);
+    gfx->setTextSize(2);
     gfx->setTextColor(C_MUTED);
-    gfx->setCursor(12, barY + 20);
+    gfx->setCursor(12, barY + 18);
     gfx->print(buf);
 
     y += 84;
   }
 
-  // footer: ip + staleness
-  gfx->setTextSize(1);
-  gfx->setTextColor(C_MUTED);
-  gfx->setCursor(10, 306);
+  // footer: only warn when the data's gone stale (the IP lives on the setup
+  // screen and the landing page — no need for an unreadable line here).
   if (lastPushMs && millis() - lastPushMs > 10UL * 60UL * 1000UL) {
+    gfx->setTextSize(1);
     gfx->setTextColor(C_WARN);
+    gfx->setCursor(10, 306);
     gfx->print("stale - no update >10m");
-  } else {
-    gfx->print(WiFi.localIP().toString());
-    gfx->print("  headroom.local");
   }
   drawBattery(212, 305);
   drawUpdateBadge(222, 20);        // top-right (clock is on the left)
