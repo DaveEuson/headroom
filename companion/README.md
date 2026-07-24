@@ -3,6 +3,22 @@
 Runs on the **computer where you use Claude Code** and feeds your usage to the
 Pi.
 
+## Tray app (menubar / system tray)
+
+`tray.py` is the friendly version — it lives in your menubar (macOS) or system
+tray (Windows/Linux) instead of a terminal. The icon is green when it's feeding
+the board, amber while it's searching, red when it's stuck; the menu has
+one-click **Pair** (make the board self-contained), **Open board page**, and a
+**Feeding** toggle. It reuses everything below.
+
+```
+pip install pystray pillow certifi        # + pyobjc-framework-Cocoa on macOS
+python tray.py
+```
+
+(A packaged, double-click build will ship with a release once it's verified on
+each OS — until then, run it from source as above.)
+
 ## Why this exists
 
 The Pi can't sign in to Anthropic directly — the fresh OAuth sign-in endpoint
