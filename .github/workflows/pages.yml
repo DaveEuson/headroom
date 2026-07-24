@@ -1,13 +1,19 @@
 name: Deploy setup page
 
-# Publishes docs/ (the browser flasher + setup page) to GitHub Pages.
+# Publishes docs/ (the browser flasher + setup page) to GitHub Pages, and
+# bundles the latest release firmware into the site so the flasher fetches it
+# same-origin (GitHub's release-asset host sends no CORS header, so a
+# cross-origin fetch from the Pages site is blocked -> "Failed to fetch").
+#
 # One-time repo setup: Settings -> Pages -> Source = "GitHub Actions".
-# After that this deploys on every push that touches docs/.
+# Redeploys on docs changes and after every published release.
 
 on:
   push:
     branches: [main]
     paths: ["docs/**", ".github/workflows/pages.yml"]
+  release:
+    types: [published]
   workflow_dispatch: {}
 
 permissions:
@@ -27,6 +33,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Bundle latest firmware for the flasher (same-origin, no CORS)
+        run: |
+          url="https://github.com/${{ github.repository }}/releases/latest/download/headroom-mini-merged.bin"
+          if curl -fsSL -o docs/firmware/headroom-mini-merged.bin "$url"; then
+            echo "bundled $(du -h docs/firmware/headroom-mini-merged.bin | cut -f1) firmware image"
+          else
+            echo "::warning::no latest-release firmware yet; flasher Install will 404 until a release exists"
+          fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

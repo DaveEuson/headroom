@@ -5,3 +5,6 @@ companion/companion.config.json
 history.json
 .pio/
 firmware/.pio/
+
+# firmware image is fetched into the Pages build by CI, never committed
+docs/firmware/*.bin

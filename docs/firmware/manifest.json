@@ -7,7 +7,7 @@
       "chipFamily": "ESP32-S3",
       "parts": [
         {
-          "path": "https://github.com/DaveEuson/HeadroomMini/releases/latest/download/headroom-mini-merged.bin",
+          "path": "headroom-mini-merged.bin",
           "offset": 0
         }
       ]
