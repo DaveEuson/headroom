@@ -52,6 +52,12 @@ static const uint16_t C_WARN_T= RGB565(0x46, 0x3B, 0x1A);
 static const uint16_t C_CRIT  = RGB565(0xE0, 0x52, 0x52);
 static const uint16_t C_CRIT_T= RGB565(0x4A, 0x27, 0x27);
 
+// Sprocket, the mascot
+static const uint16_t C_SPRK  = RGB565(0x5F, 0x83, 0xA1);   // body
+static const uint16_t C_SPRK_D= RGB565(0x3F, 0x5F, 0x7A);   // shade
+static const uint16_t C_OUT   = RGB565(0x1A, 0x18, 0x16);   // outline / features
+static const uint16_t C_FACE  = RGB565(0xFA, 0xF7, 0xEF);   // face screen
+
 // ------------------------------------------------------------------- state
 
 struct Window {
@@ -104,8 +110,8 @@ static bool      showUsed    = false; // false = "% left", true = "% used"
 static bool      screenOff   = false; // face-down / manual dim
 static char      tzEnv[48]   = "EST5EDT,M3.2.0,M11.1.0";  // POSIX TZ, set via /settings
 static bool      clock24     = false; // false = 12-hour (3:45 PM), true = 24-hour
-static int       uiScreen    = 0;     // 0 = all meters, 1 = focus, 2 = history
-static const int UI_SCREENS  = 3;
+static int       uiScreen    = 0;     // 0 = meters, 1 = focus, 2 = history, 3 = Sprocket
+static const int UI_SCREENS  = 4;
 
 // Usage history: a ring buffer of the headline utilization, one sample every
 // SAMPLE_INTERVAL_MS, persisted to flash hourly so it survives reboots.
@@ -402,10 +408,89 @@ static void drawHistory() {
   drawCentered(buf, gy + gh + 16, 2, C_INK);
 }
 
+// Sprocket, the mascot. Reacts to remaining headroom (and the time of day).
+static void drawMascot() {
+  gfx->fillScreen(C_BG);
+  static const char *const body[11] = {
+      "...K...K...",  "...B...B...",  "..KKKKKKK..",
+      ".KBBBBBBBK.",  ".KWWWWWWWK.",  ".KWWWWWWWK.",
+      ".KWWWWWWWK.",  ".KWWWWWWWK.",  ".KBSBBBSBK.",
+      ".KBBBBBBBK.",  "..KK...KK.."};
+  const int S = 18, ox = (240 - 11 * S) / 2, oy = 44;
+  for (int y = 0; y < 11; y++)
+    for (int x = 0; x < 11; x++) {
+      uint16_t c;
+      switch (body[y][x]) {
+        case 'K': c = C_OUT;    break;
+        case 'W': c = C_FACE;   break;
+        case 'B': c = C_SPRK;   break;
+        case 'S': c = C_SPRK_D; break;
+        default:  continue;
+      }
+      gfx->fillRect(ox + x * S, oy + y * S, S, S, c);
+    }
+
+  // mood from the most-constrained window + time of day
+  int idx = -1;
+  for (int i = 0; i < nWindows; i++)
+    if (idx < 0 || windows[i].utilization > windows[idx].utilization) idx = i;
+  int u = idx < 0 ? -1 : (int)(windows[idx].utilization + 0.5f);
+  int left = u < 0 ? -1 : 100 - u;
+  bool night = false;
+  time_t now = time(nullptr);
+  if (timeSynced && now > 100000) {
+    struct tm t; localtime_r(&now, &t);
+    night = (t.tm_hour >= 22 || t.tm_hour < 7);
+  }
+  int mood = left < 0 ? 4 : night ? 3 : left <= 10 ? 2 : left <= 30 ? 1 : 0;
+  uint16_t mc = mood == 2 ? C_CRIT : mood == 1 ? C_WARN
+              : mood == 0 ? C_ACC : C_MUTED;
+
+  gfx->fillRect(ox + 3 * S, oy + S, S, S, mc);        // antenna balls glow w/ mood
+  gfx->fillRect(ox + 7 * S, oy + S, S, S, mc);
+
+  int ey = oy + 5 * S, lx = ox + 3 * S, rx = ox + 7 * S;   // eyes
+  if (mood == 3) {                                    // asleep - closed
+    gfx->fillRect(lx, ey + S / 2, S, S / 4, C_OUT);
+    gfx->fillRect(rx, ey + S / 2, S, S / 4, C_OUT);
+  } else if (mood == 2) {                             // tapped out - small
+    gfx->fillRect(lx + S / 4, ey + S / 4, S / 2, S / 2, C_OUT);
+    gfx->fillRect(rx + S / 4, ey + S / 4, S / 2, S / 2, C_OUT);
+  } else {                                            // open
+    gfx->fillRect(lx, ey, S, S, C_OUT);
+    gfx->fillRect(rx, ey, S, S, C_OUT);
+  }
+
+  int my = oy + 7 * S, mx = ox + 4 * S;               // mouth
+  if (mood == 0)      gfx->fillRect(mx, my + S / 3, 3 * S, S / 2, C_OUT);   // smile
+  else if (mood == 1) gfx->fillRect(mx + S, my + S / 4, S, S / 2, C_OUT);   // worried o
+  else if (mood == 3) gfx->fillRect(mx + S, my + S / 3, S, S / 3, C_OUT);   // sleepy
+  else                gfx->fillRect(mx, my + S / 2, 3 * S, S / 5, C_OUT);   // flat
+
+  if (mood == 3) drawCentered("z  z  z", oy - 4, 2, C_MUTED);
+
+  const char *word = mood == 0 ? "plenty of headroom"
+                   : mood == 1 ? "getting low"
+                   : mood == 2 ? "tapped out"
+                   : mood == 3 ? "good night" : "waiting for usage";
+  int cy = oy + 11 * S + 14;
+  drawCentered(word, cy, 2, mc);
+  if (u >= 0) {
+    char buf[40];
+    int shown = showUsed ? u : left;
+    snprintf(buf, sizeof(buf), "%s %d%% %s", windows[idx].label, shown,
+             showUsed ? "used" : "left");
+    drawCentered(buf, cy + 26, 1, C_MUTED);
+    fmtCountdown(windows[idx].resets_at, buf, sizeof(buf));
+    if (buf[0]) drawCentered(buf, cy + 42, 1, C_MUTED);
+  }
+}
+
 // Draw whichever screen is active (data updates / ticks call this).
 static void drawScreen() {
   if (uiScreen == 1)      drawFocus();
   else if (uiScreen == 2) drawHistory();
+  else if (uiScreen == 3) drawMascot();
   else                    drawMeters();
 }
 

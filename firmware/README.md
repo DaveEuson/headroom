@@ -85,7 +85,7 @@ https://www.printables.com/model/1188149-enclosure-for-esp32-s3-touch-lcd-2
 - **v0 (this)** — screen + Wi-Fi + companion-fed meters. Bring-up day.
 - **Phase 1.5 — touch & motion (done).** CST816D capacitive touch + QMI8658
   IMU on the shared I2C bus (SDA 48 / SCL 47):
-  - **Tap / swipe L-R** → cycle screens (all meters ↔ big focus meter)
+  - **Tap / swipe L-R** → cycle screens (meters → focus → history → Sprocket)
   - **Long-press** → toggle % left / % used (saved)
   - **Swipe up / down** → brightness
   - **Face-down** → screen off; **face-up / shake** → wake
