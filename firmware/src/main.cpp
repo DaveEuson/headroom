@@ -26,14 +26,14 @@
 #include <ctype.h>
 #include <time.h>
 
-// TLS trust: verify server certs against the ESP-IDF root-CA bundle that the
-// arduino-esp32 platform embeds (covers Anthropic, GitHub, ntfy, Pushover).
-// Replaces the old setInsecure() so a MITM can't impersonate those hosts or
-// feed us a forged OTA image. If this symbol ever fails to link on a platform
-// build, that's the signal the bundle isn't embedded.
-extern const uint8_t rootca_crt_bundle_start[] asm("_binary_data_cert_x509_crt_bundle_bin_start");
+// TLS trust for every outbound HTTPS call. GOAL: verify server certs against a
+// root-CA bundle so a MITM can't impersonate Anthropic/GitHub or feed a forged
+// OTA image. That needs the ESP-IDF cert bundle embedded in the build
+// (gen_crt_bundle.py + board_build.embed_files) — tracked for the 1.2 hardening
+// release. Until then this is a no-verify handshake; keep all call sites going
+// through this one helper so turning verification on is a single-line change.
 static inline void tlsTrust(WiFiClientSecure &c) {
-  c.setCACertBundle(rootca_crt_bundle_start);
+  c.setInsecure();   // TODO(1.2): swap for setCACertBundle once the bundle ships
 }
 
 // ---------------------------------------------------------------- pins / lcd
