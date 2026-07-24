@@ -102,6 +102,7 @@ static uint8_t   backlight   = 255;   // 0..255
 static bool      showUsed    = false; // false = "% left", true = "% used"
 static bool      screenOff   = false; // face-down / manual dim
 static char      tzEnv[48]   = "EST5EDT,M3.2.0,M11.1.0";  // POSIX TZ, set via /settings
+static bool      clock24     = false; // false = 12-hour (3:45 PM), true = 24-hour
 static int       uiScreen    = 0;     // 0 = all meters, 1 = focus, 2 = history
 static const int UI_SCREENS  = 3;
 
@@ -200,17 +201,19 @@ static void drawBattery(int x, int y) {
 static void drawMeters() {
   gfx->fillScreen(C_BG);
 
-  // header: clock (UTC-less fallback: hide until NTP syncs)
+  // header: clock (hidden until NTP syncs), with the plan as a caption under it
   char buf[40];
   time_t now = time(nullptr);
   if (timeSynced && now > 100000) {
     struct tm tmnow;
     localtime_r(&now, &tmnow);
-    strftime(buf, sizeof(buf), "%H:%M", &tmnow);
+    strftime(buf, sizeof(buf), clock24 ? "%H:%M" : "%I:%M %p", &tmnow);
+    const char *clk = buf;
+    if (!clock24 && buf[0] == '0') clk = buf + 1;   // "03:45 PM" -> "3:45 PM"
     gfx->setTextSize(4);
     gfx->setTextColor(C_INK);
     gfx->setCursor(10, 10);
-    gfx->print(buf);
+    gfx->print(clk);
   } else {
     gfx->setTextSize(2);
     gfx->setTextColor(C_MUTED);
@@ -218,10 +221,10 @@ static void drawMeters() {
     gfx->print("--:--");
   }
   if (plan[0]) {
-    snprintf(buf, sizeof(buf), "%s", plan);
+    snprintf(buf, sizeof(buf), "%s plan", plan);
     gfx->setTextSize(1);
-    gfx->setTextColor(C_ACC);
-    gfx->setCursor(190, 14);
+    gfx->setTextColor(C_MUTED);
+    gfx->setCursor(12, 46);
     gfx->print(buf);
   }
 
@@ -831,6 +834,7 @@ static void loadCreds() {
   poUser     = prefs.getString("pouser", "");
   alertPct   = prefs.getInt("alpct", 90);
   strlcpy(tzEnv, prefs.getString("tz", tzEnv).c_str(), sizeof(tzEnv));
+  clock24    = prefs.getBool("clk24", false);
   prefs.end();
   selfHosted = accessTok.length() > 0;
 }
@@ -1170,24 +1174,33 @@ static void handleSettingsPage() {
     s += TZ_OPTIONS[i][0];
     s += "</option>";
   }
-  s += F("</select><button type=submit>Save</button></form>"
+  s += F("</select><label>Clock format</label><select name=clock>"
+         "<option value=12");
+  if (!clock24) s += " selected";
+  s += F(">12-hour (3:45 PM)</option><option value=24");
+  if (clock24) s += " selected";
+  s += F(">24-hour (15:45)</option></select>"
+         "<button type=submit>Save</button></form>"
          "<p class=muted>Reset countdowns are timezone-independent.</p></div></body></html>");
   server->send(200, "text/html", s);
 }
 
 static void handleSettingsSave() {
+  prefs.begin("headroom", false);
   String tz = server->arg("tz");
-  bool known = false;
   for (int i = 0; i < N_TZ; i++)
-    if (tz == TZ_OPTIONS[i][1]) { known = true; break; }   // only accept a listed value
-  if (known) {
-    strlcpy(tzEnv, tz.c_str(), sizeof(tzEnv));
-    prefs.begin("headroom", false);
-    prefs.putString("tz", tzEnv);
-    prefs.end();
-    applyTz();
-    drawScreen();
+    if (tz == TZ_OPTIONS[i][1]) {              // only accept a listed value
+      strlcpy(tzEnv, tz.c_str(), sizeof(tzEnv));
+      prefs.putString("tz", tzEnv);
+      applyTz();
+      break;
+    }
+  if (server->hasArg("clock")) {
+    clock24 = (server->arg("clock") == "24");
+    prefs.putBool("clk24", clock24);
   }
+  prefs.end();
+  drawScreen();
   server->send(200, "text/html", "<p>Saved. <a href=/settings>back</a></p>");
 }
 
