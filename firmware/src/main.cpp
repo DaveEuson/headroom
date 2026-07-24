@@ -15,6 +15,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <Update.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <ESPmDNS.h>
@@ -92,6 +93,11 @@ static const char *REFRESH_URL = "https://platform.claude.com/v1/oauth/token";
 static const char *USAGE_URL   = "https://api.anthropic.com/api/oauth/usage";
 static const char *OAUTH_BETA  = "oauth-2025-04-20";
 static const char *UA          = "Headroom-Mini/1.0.0";
+// OTA self-update (over-the-air from the GitHub release)
+static const char *RELEASES_API =
+    "https://api.github.com/repos/DaveEuson/HeadroomMini/releases/latest";
+static const char *APP_BIN_URL =
+    "https://github.com/DaveEuson/HeadroomMini/releases/latest/download/headroom-mini-app.bin";
 static const unsigned long POLL_INTERVAL_MS = 5UL * 60UL * 1000UL;
 
 static String   accessTok, refreshTok;
@@ -1104,6 +1110,133 @@ static void pollUsage() {
   if (selfHosted && WiFi.status() == WL_CONNECTED) fetchUsage(true);
 }
 
+// ------------------------------------------------- OTA self-update (over Wi-Fi)
+
+static void parseVer(const char *s, int out[3]) {
+  if (*s == 'v' || *s == 'V') s++;
+  out[0] = out[1] = out[2] = 0;
+  sscanf(s, "%d.%d.%d", &out[0], &out[1], &out[2]);
+}
+
+static bool tagNewer(const char *latest, const char *current) {
+  int L[3], C[3];
+  parseVer(latest, L);
+  parseVer(current, C);
+  for (int i = 0; i < 3; i++)
+    if (L[i] != C[i]) return L[i] > C[i];
+  return false;
+}
+
+// The latest published release's tag (e.g. "v1.1.0"), or "" on failure.
+static String fetchLatestTag() {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient https;
+  https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  if (!https.begin(client, RELEASES_API)) return "";
+  https.addHeader("User-Agent", UA);
+  https.addHeader("Accept", "application/vnd.github+json");
+  int code = https.GET();
+  if (code != 200) { https.end(); return ""; }
+  String body = https.getString();
+  https.end();
+  JsonDocument filter;
+  filter["tag_name"] = true;                // keep only the tag to save memory
+  JsonDocument doc;
+  if (deserializeJson(doc, body, DeserializationOption::Filter(filter))) return "";
+  const char *tag = doc["tag_name"].as<const char *>();
+  return tag ? String(tag) : "";
+}
+
+static void drawUpdateProgress(int pct) {
+  static int last = -1;
+  if (pct == last) return;
+  last = pct;
+  gfx->fillScreen(C_BG);
+  drawCentered("Updating Headroom", 110, 2, C_INK);
+  char b[8];
+  snprintf(b, sizeof(b), "%d%%", pct);
+  drawCentered(b, 150, 4, C_ACC);
+  gfx->drawRect(30, 208, 180, 16, C_MUTED);
+  int w = 176 * pct / 100;
+  if (w > 0) gfx->fillRect(32, 210, w, 12, C_ACC);
+  drawCentered("keep it powered", 244, 1, C_MUTED);
+}
+
+// Download the app image straight into the inactive OTA slot. The running
+// firmware is never overwritten, so a failed download just leaves us as-is.
+static bool doOTA() {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient https;
+  https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  if (!https.begin(client, APP_BIN_URL)) return false;
+  https.addHeader("User-Agent", UA);
+  int code = https.GET();
+  if (code != 200) { https.end(); return false; }
+  int len = https.getSize();
+  if (len <= 0) { https.end(); return false; }
+  if (!Update.begin((size_t)len)) { https.end(); return false; }
+  Update.onProgress([](size_t done, size_t total) {
+    drawUpdateProgress(total ? (int)(done * 100 / total) : 0);
+  });
+  size_t written = Update.writeStream(*https.getStreamPtr());
+  https.end();
+  if (written != (size_t)len) { Update.abort(); return false; }
+  return Update.end(true);   // true = mark the new slot bootable
+}
+
+static void handleUpdatePage() {
+  String latest = fetchLatestTag();
+  bool newer = latest.length() && tagNewer(latest.c_str(), FW_VERSION);
+  String s = F(
+      "<!DOCTYPE html><html><head><meta charset=utf-8>"
+      "<meta name=viewport content='width=device-width,initial-scale=1'>"
+      "<title>Headroom - update</title><style>"
+      "body{font-family:system-ui;background:#f0eee6;color:#3d3929;padding:22px 16px;margin:0}"
+      ".card{background:#faf9f5;border:1px solid rgba(61,57,41,.12);border-radius:14px;"
+      "padding:16px;max-width:460px;margin:0 auto}h2{margin:.2rem 0 .6rem}"
+      "button{background:#d97757;color:#fff;font-weight:600;font-size:1rem;padding:12px 18px;"
+      "border:none;border-radius:10px}.muted{color:#94907e;font-size:.9rem}"
+      "code{background:rgba(61,57,41,.07);padding:1px 6px;border-radius:5px}"
+      "</style></head><body><div class=card><h2>Firmware update</h2>");
+  s += "<p>Installed: <code>v";
+  s += FW_VERSION;
+  s += "</code>";
+  if (latest.length()) { s += " &middot; Latest: <code>"; s += latest; s += "</code>"; }
+  s += "</p>";
+  if (!latest.length())
+    s += F("<p class=muted>Couldn't reach GitHub to check right now.</p>");
+  else if (newer)
+    s += F("<form method=POST action=/update/install>"
+           "<button type=submit>Install update</button></form>"
+           "<p class=muted>Takes about a minute. The board keeps your Wi-Fi and "
+           "login, shows progress, and reboots itself. Keep it powered.</p>");
+  else
+    s += F("<p>&#10003; You're on the latest version.</p>");
+  s += F("</div></body></html>");
+  server->send(200, "text/html", s);
+}
+
+static void handleUpdateInstall() {
+  server->send(200, "text/html",
+               "<h2>Updating&hellip;</h2><p>The board is installing and will "
+               "reboot in about a minute. Watch its screen.</p>");
+  delay(150);
+  drawUpdateProgress(0);
+  if (doOTA()) {
+    drawCentered("Done - rebooting", 268, 1, C_ACC);
+    delay(800);
+    ESP.restart();
+  } else {
+    gfx->fillScreen(C_BG);
+    drawCentered("Update failed", 130, 2, C_CRIT);
+    drawCentered("still on the old version", 165, 1, C_MUTED);
+    delay(2500);
+    drawScreen();
+  }
+}
+
 // ---- /connect web page: paste a Claude login once, board polls on its own ---
 
 static void handleConnectPage() {
@@ -1385,6 +1518,7 @@ static void handleRoot() {
          "account for the board.</p></div>"
          "<div class=card><a class=btn href=/alerts>Set up phone alerts</a>"
          "<a class=btn href=/settings style='background:#8a8577'>Settings</a>"
+         "<a class=btn href=/update style='background:#8a8577'>Updates</a>"
          "<details class=muted style='margin-top:12px'>"
          "<summary>Advanced: paste a login by hand</summary>"
          "<p><a href=/connect>Open the manual connect page</a> &mdash; only if "
@@ -1599,6 +1733,8 @@ static void startApi() {
   server->on("/alerts/test", HTTP_POST, handleAlertsTest);
   server->on("/settings", HTTP_GET, handleSettingsPage);
   server->on("/settings", HTTP_POST, handleSettingsSave);
+  server->on("/update", HTTP_GET, handleUpdatePage);
+  server->on("/update/install", HTTP_POST, handleUpdateInstall);
   server->on("/", HTTP_GET, handleRoot);
   server->begin();
   MDNS.begin("headroom");

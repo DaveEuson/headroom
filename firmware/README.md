@@ -107,6 +107,10 @@ https://www.printables.com/model/1188149-enclosure-for-esp32-s3-touch-lcd-2
 
 - Set the header clock's timezone at `http://<board-ip>:8080/settings`
   (defaults to US Eastern). Countdowns are timezone-independent.
+- Update over Wi-Fi at `http://<board-ip>:8080/update` — it downloads the app
+  image from the latest GitHub release into the inactive OTA slot and reboots,
+  keeping your Wi-Fi/login/settings. A failed download leaves the running
+  firmware untouched; worst case, re-flash over USB.
 - Touch, battery gauge, and on-device Anthropic polling are not in v0.
 - If the saved Wi-Fi can't be reached at boot it falls back to the setup
   hotspot without erasing the saved network (a router reboot won't force
